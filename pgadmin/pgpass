@@ -1,0 +1,7 @@
+# BTC ML Production - pgpass credentials
+# Format: hostname:port:database:username:password
+# This file is used by PostgreSQL client tools to avoid password prompts
+# Permissions MUST be 600 (read/write owner only)
+# Note: This template uses environment variable - replaced at runtime by entrypoint.sh
+
+timescaledb:5432:btc_ml_production:mltrader:${DB_PASSWORD}

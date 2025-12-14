@@ -1,0 +1,22 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "TimescaleDB (BTC ML)",
+      "Group": "Production",
+      "Host": "timescaledb",
+      "Port": 5432,
+      "MaintenanceDB": "btc_ml_production",
+      "Username": "mltrader",
+      "SSLMode": "prefer",
+      "AutoConnect": true,
+      "PreferenceId": 1,
+      "Tags": [
+        "timescaledb",
+        "production",
+        "cryptocurrency",
+        "ml-pipeline"
+      ],
+      "Description": "TimescaleDB for Bitcoin ML trading stack with real-time candles and predictions"
+    }
+  }
+}

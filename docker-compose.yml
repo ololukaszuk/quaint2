@@ -1,0 +1,151 @@
+services:
+
+  # TimescaleDB with pg_cron - Time-series database for cryptocurrency data
+  timescaledb:
+    build:
+      context: .
+      dockerfile: timescaledb/Dockerfile
+    container_name: btc-ml-timescaledb
+    environment:
+      - POSTGRES_DB=btc_ml_production
+      - POSTGRES_USER=mltrader
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_HOST_AUTH_METHOD=scram-sha-256
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    command: >
+      postgres
+      -c shared_preload_libraries=timescaledb,pg_cron
+      -c cron.database_name=btc_ml_production
+      -c max_connections=200
+      -c shared_buffers=256MB
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mltrader -d btc_ml_production"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - btc-ml-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # Rust Data Feeder - Real-time price ingestion from Binance
+  data-feeder:
+    build:
+      context: .
+      dockerfile: data-feeder/Dockerfile
+    container_name: btc-ml-feeder
+    environment:
+      - BINANCE_STREAM_URL=${BINANCE_STREAM_URL:-wss://stream.binance.com:9443/ws}
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=btc_ml_production
+      - DB_USER=mltrader
+      - DB_PASSWORD=${DB_PASSWORD}
+      - FEATURE_UPDATE_INTERVAL=60
+      - GAP_DETECTION_THRESHOLD=70
+      - GAP_HANDLER_URL=http://gap-handler:9000/backfill
+      - HEALTH_CHECK_PORT=8080
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    ports:
+      - "${FEEDER_PORT:-8080}:8080"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - btc-ml-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # Go Gap Handler - Backfill missing candles from Binance REST API
+  gap-handler:
+    build:
+      context: .
+      dockerfile: gap-handler/Dockerfile
+    container_name: btc-ml-gap-handler
+    environment:
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=btc_ml_production
+      - DB_USER=mltrader
+      - DB_PASSWORD=${DB_PASSWORD}
+      - BINANCE_API_URL=https://api.binance.com
+      - GAP_HANDLER_PORT=9000
+      - MAX_CONCURRENT_BACKFILLS=5
+      - BACKFILL_TIMEOUT_SECONDS=300
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    ports:
+      - "${GAP_HANDLER_PORT:-9000}:9000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      data-feeder:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - btc-ml-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+  # pgAdmin4 - PostgreSQL web management interface
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: btc-ml-pgadmin
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD:-admin}
+      - SCRIPT_NAME=/pgadmin4
+    ports:
+      - "${PGADMIN_PORT:-8000}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+      - ./pgadmin/entrypoint.sh:/custom-entrypoint.sh:ro
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - btc-ml-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+volumes:
+  timescaledb_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  btc-ml-network:
+    driver: bridge
