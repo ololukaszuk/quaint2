@@ -241,7 +241,7 @@ impl HealthState {
         // Check for stale data (no candles in 2+ minutes)
         if let Some(last) = last_candle_time {
             let elapsed = Utc::now() - last;
-            if elapsed.num_seconds() > 120 {
+            if elapsed.num_seconds() > 121 {
                 return HealthStatus::Unhealthy;
             }
         }
@@ -258,7 +258,7 @@ impl HealthState {
         // Check for gap in last candle time
         if let Some(last) = last_candle_time {
             let elapsed = Utc::now() - last;
-            if elapsed.num_seconds() > 60 {
+            if elapsed.num_seconds() > 61 {
                 return HealthStatus::Degraded;
             }
         }
