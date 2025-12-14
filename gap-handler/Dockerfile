@@ -11,7 +11,6 @@ FROM golang:1.21-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache \
-    wget \
     git \
     ca-certificates \
     tzdata
@@ -51,10 +50,10 @@ LABEL description="Gap backfill handler for Binance REST API"
 LABEL version="1.0"
 
 # Install runtime dependencies only
-# wget for health checks, ca-certificates for HTTPS
+# curl for health checks, ca-certificates for HTTPS
 RUN apk add --no-cache \
     ca-certificates \
-    wget \
+    curl \
     tzdata \
     && rm -rf /var/cache/apk/*
 
@@ -89,7 +88,7 @@ ENV TZ=UTC
 # Checks /health endpoint every 10 seconds
 # Allows 30 seconds for startup before checking
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:9000/health || exit 1
+    CMD curl --fsS http://localhost:9000/health || exit 1
 
 # Graceful shutdown: SIGTERM is handled by the application
 STOPSIGNAL SIGTERM
