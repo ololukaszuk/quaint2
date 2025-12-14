@@ -11,6 +11,7 @@ FROM golang:1.21-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache \
+    wget \
     git \
     ca-certificates \
     tzdata

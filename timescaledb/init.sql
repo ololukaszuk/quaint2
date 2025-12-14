@@ -305,7 +305,7 @@ CREATE TABLE data_quality_logs (
         event_type IN ('gap_detected', 'gap_backfilled', 'duplicate_found', 'error')
     ),
     CONSTRAINT data_quality_logs_source_check CHECK (
-        source IS NULL OR source IN ('websocket', 'rest_api', 'manual', 'system')
+        source IS NULL OR source IN ('data_feeder', 'gap_handler', 'websocket', 'rest_api', 'manual', 'system')
     ),
     CONSTRAINT data_quality_logs_gap_consistency CHECK (
         (event_type != 'gap_detected' AND event_type != 'gap_backfilled') OR
