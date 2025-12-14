@@ -22,7 +22,7 @@ Production-grade real-time cryptocurrency data pipeline with Rust + Go microserv
          │   Port: 8080                  │
          │   - WebSocket ingestion       │
          │   - Batch writer (10/1s)      │
-         │   - Gap detector (>60s)       │
+         │   - Gap detector (>70s)       │
          │   - Feature computer          │
          └────────────┬────────────────┘
                       │

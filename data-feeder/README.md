@@ -7,7 +7,7 @@ Production-ready Rust service for real-time Binance cryptocurrency data ingestio
 The Data Feeder is a high-performance async service that:
 - Connects to Binance WebSocket (`BTCUSDT@kline_1m` + `BTCUSDT@bookTicker`)
 - Streams 1-minute candlestick data in real-time
-- Performs automatic gap detection (>60 seconds)
+- Performs automatic gap detection (>70 seconds)
 - Computes normalized ML features for prediction models
 - Writes batches to TimescaleDB with retry logic
 - Exposes health check endpoints for monitoring
