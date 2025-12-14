@@ -1,0 +1,121 @@
+# Rust
+target/
+Cargo.lock
+*.rs.bk
+**/*.rs.bk
+/data-feeder/target
+
+# Go
+/gap-handler/vendor
+/gap-handler/*.out
+/gap-handler/*.test
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Node
+node_modules/
+npm-debug.log
+package-lock.json
+
+# Database
+*.sql.bak
+*.dump
+*.backup
+pgdata/
+postgres_data/
+
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+.env.production
+*.key
+*.pem
+pgpass
+secrets/
+.secrets/
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+.classpath
+.project
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Build & Deployment
+build/
+dist/
+*.egg-info/
+.gradle/
+.m2/
+.terraform/
+.terraform.lock.hcl
+
+# Logs
+*.log
+logs/
+*.log.gz
+tmp/
+temp/
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# Testing
+coverage/
+.coverage
+.pytest_cache/
+htmlcov/
+*.lcov
+
+# OS
+Thumbs.db
+.DS_Store
+*.tmp
+.Spotlight-V100
+.Trashes
+
+# Documentation
+site/
+docs/_build/
+
+# Project specific
+*.dump
+backups/
+data/
+!data/.gitkeep
+
+# Work in progress
+WIP/
+TODO/
+*.wip
+*.todo
+
+# CI/CD
+.github/workflows/*.log
+
+# Performance profiling
+prof/
+*.prof
+pprof/
