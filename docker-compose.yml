@@ -16,6 +16,7 @@ services:
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
       - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./ml-layer-1/migrations/001_ml_tables.sql:/docker-entrypoint-initdb.d/02-ml-tables.sql
     command: >
       postgres
       -c shared_preload_libraries=timescaledb,pg_cron
@@ -140,10 +141,98 @@ services:
         max-size: "100m"
         max-file: "10"
 
+  # ============================================================================
+  # ML LAYER 1 SERVICES
+  # ============================================================================
+
+  # ML Training Service - Daily model retraining (03:00 UTC)
+  # Run manually: docker-compose run ml-trainer
+  # Or schedule via cron/k8s CronJob
+  ml-trainer:
+    build:
+      context: ./ml-layer-1/training
+      dockerfile: Dockerfile
+    container_name: btc-ml-trainer
+    environment:
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=btc_ml_production
+      - DB_USER=mltrader
+      - DB_PASSWORD=${DB_PASSWORD}
+      - TRAINING_MONTHS=${TRAINING_MONTHS:-13}
+      - VALIDATION_DAYS=${VALIDATION_DAYS:-30}
+      - TEST_DAYS=${TEST_DAYS:-7}
+      - BATCH_SIZE=${ML_BATCH_SIZE:-32}
+      - MAMBA_EPOCHS=${MAMBA_EPOCHS:-50}
+      - MAMBA_LEARNING_RATE=${MAMBA_LEARNING_RATE:-0.001}
+      - MODELS_DIR=/app/models
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ml_models:/app/models
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    networks:
+      - btc-ml-network
+    profiles:
+      - ml-training
+    restart: "no"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ML Inference Service - Standalone (optional)
+  # Only needed if not using inference integrated in data-feeder
+  ml-inference:
+    build:
+      context: ./ml-layer-1/inference
+      dockerfile: Dockerfile
+    container_name: btc-ml-inference
+    environment:
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=btc_ml_production
+      - DB_USER=mltrader
+      - DB_PASSWORD=${DB_PASSWORD}
+      - ML_ENABLED=${ML_ENABLED:-true}
+      - ML_MAMBA_MODEL_PATH=/app/models/mamba.pt
+      - ML_LGBM_MODELS_DIR=/app/models
+      - ML_NORM_PARAMS_PATH=/app/models/normalization_params_v1.json
+      - ML_MAMBA_WEIGHT=${ML_MAMBA_WEIGHT:-0.5}
+      - ML_DEVICE=${ML_DEVICE:-cpu}
+      - RUST_LOG=${LOG_LEVEL:-info}
+    volumes:
+      - ml_models:/app/models:ro
+    ports:
+      - "${ML_INFERENCE_PORT:-8081}:8081"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - btc-ml-network
+    profiles:
+      - ml-inference
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
 volumes:
   timescaledb_data:
     driver: local
   pgadmin_data:
+    driver: local
+  ml_models:
     driver: local
 
 networks:
