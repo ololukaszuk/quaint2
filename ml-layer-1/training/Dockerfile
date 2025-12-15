@@ -25,8 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
     update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
-# Upgrade pip
-RUN python -m pip install --upgrade pip setuptools wheel --break-system-packages
+# Upgrade pip FIRST (without --break-system-packages)
+RUN python -m pip install --upgrade pip setuptools wheel
 
 # Set working directory
 WORKDIR /app
@@ -35,14 +35,14 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install PyTorch with CUDA 12.8 support
-RUN pip install --no-cache-dir --break-system-packages \
+RUN pip install --no-cache-dir \
     torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # Install ONNX Runtime GPU 1.19.2
-RUN pip install --no-cache-dir --break-system-packages onnxruntime-gpu==1.19.2
+RUN pip install --no-cache-dir onnxruntime-gpu==1.19.2
 
 # Install remaining Python dependencies
-RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy training code
 COPY . .
