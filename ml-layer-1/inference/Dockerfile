@@ -7,7 +7,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Builder - Compile Rust binary with CUDA support
 # -----------------------------------------------------------------------------
-FROM nvidia/cuda:12.8.0-devel-debian12 AS builder
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04 AS builder
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -84,7 +84,7 @@ RUN ls -lh target/release/ml-inference
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime - Minimal CUDA runtime image
 # -----------------------------------------------------------------------------
-FROM nvidia/cuda:12.8.0-runtime-debian12
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
