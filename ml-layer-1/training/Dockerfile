@@ -1,10 +1,10 @@
 # ============================================================================
 # ML Layer 1 - Python Training Dockerfile
-# CUDA 12.8 + RTX 5090 Support (debian12 base)
+# CUDA 12.8 + RTX 5090 Support (ubuntu22.04 base)
 # For daily retraining and model export
 # ============================================================================
 
-FROM nvidia/cuda:12.8.0-devel-debian12
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
 
 # Prevent interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive

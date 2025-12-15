@@ -1,6 +1,6 @@
 # ============================================================================
 # ML Layer 1 - Rust Inference Dockerfile
-# CUDA 12.8 + RTX 5090 Support (debian12 base)
+# CUDA 12.8 + RTX 5090 Support (ubuntu22.04 base)
 # Multi-stage build for production deployment
 # ============================================================================
 
