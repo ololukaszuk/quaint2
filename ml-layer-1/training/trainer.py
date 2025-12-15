@@ -215,8 +215,9 @@ class MambaTrainer:
             dataset,
             batch_size=self.config.batch_size,
             shuffle=shuffle,
-            num_workers=0,
+            num_workers=getattr(self.config, 'num_workers', 4),
             pin_memory=True if 'cuda' in str(self.device) else False,
+            persistent_workers=True if getattr(self.config, 'num_workers', 4) > 0 else False,
         )
     
     def save_checkpoint(self, path: str, history: Dict[str, Any] = None) -> None:

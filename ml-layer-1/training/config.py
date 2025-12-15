@@ -86,12 +86,15 @@ class MambaConfig:
     n_layers: int = 4
     dropout: float = 0.1
     
-    # Training
+    # Training - OPTIMIZED FOR RTX 5090 (32GB VRAM)
     learning_rate: float = 0.001
     weight_decay: float = 0.01
-    batch_size: int = 32
+    batch_size: int = field(default_factory=lambda: int(os.getenv("ML_BATCH_SIZE", "512")))
     epochs: int = 100
     early_stopping_patience: int = 10
+    
+    # DataLoader settings
+    num_workers: int = field(default_factory=lambda: int(os.getenv("ML_NUM_WORKERS", "4")))
     
     # Input/Output
     input_size: int = NUM_FEATURES  # 27
