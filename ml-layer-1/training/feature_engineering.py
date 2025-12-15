@@ -71,16 +71,26 @@ def compute_sma(data: np.ndarray, period: int) -> np.ndarray:
     Returns:
         SMA array (first `period-1` values use available data)
     """
-    result = np.zeros_like(data)
+    result = np.zeros_like(data, dtype=np.float64)
+    n = len(data)
+    
+    if n == 0:
+        return result
+    
     cumsum = np.cumsum(data)
     
     # First period-1 values: use expanding window
-    for i in range(min(period - 1, len(data))):
+    for i in range(min(period - 1, n)):
         result[i] = cumsum[i] / (i + 1)
     
-    # Rest: proper rolling window
-    if len(data) >= period:
-        result[period - 1:] = (cumsum[period - 1:] - np.concatenate([[0], cumsum[:-period]])[1:]) / period
+    # Rest: proper rolling window using cumsum
+    # SMA[i] = (cumsum[i] - cumsum[i-period]) / period
+    # For i = period-1: SMA[period-1] = cumsum[period-1] / period (since cumsum[-1] = 0)
+    if n >= period:
+        # Create shifted cumsum: [0, cumsum[0], cumsum[1], ..., cumsum[n-2]]
+        shifted = np.zeros(n)
+        shifted[period:] = cumsum[:-period]
+        result[period - 1:] = (cumsum[period - 1:] - shifted[period - 1:]) / period
     
     return result
 

@@ -42,16 +42,16 @@ class MambaTrainer:
             weight_decay=config.weight_decay,
         )
         
+        # Note: 'verbose' parameter removed for PyTorch 2.2+ compatibility
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
             self.optimizer,
             mode='min',
             factor=0.5,
             patience=5,
-            verbose=True,
         )
         
         self.criterion = nn.MSELoss()
-        self.scaler = torch.cuda.amp.GradScaler() if 'cuda' in str(self.device) else None
+        self.scaler = torch.amp.GradScaler('cuda') if 'cuda' in str(self.device) else None
     
     def train(
         self,
@@ -95,6 +95,9 @@ class MambaTrainer:
             # Validation phase
             val_loss = self._validate_epoch(val_loader)
             
+            # Get LR before scheduler step for logging
+            old_lr = self.optimizer.param_groups[0]['lr']
+            
             # Update scheduler
             self.scheduler.step(val_loss)
             
@@ -107,10 +110,15 @@ class MambaTrainer:
             history['learning_rate'].append(current_lr)
             history['epoch_times'].append(epoch_time)
             
+            # Log LR change if it occurred
+            lr_msg = f"lr: {current_lr:.6f}"
+            if current_lr != old_lr:
+                lr_msg += f" (reduced from {old_lr:.6f})"
+            
             logger.info(
                 f"Epoch {epoch + 1}/{self.config.epochs} - "
                 f"train_loss: {train_loss:.6f}, val_loss: {val_loss:.6f}, "
-                f"lr: {current_lr:.6f}, time: {epoch_time:.1f}s"
+                f"{lr_msg}, time: {epoch_time:.1f}s"
             )
             
             # Early stopping check
@@ -146,7 +154,7 @@ class MambaTrainer:
             self.optimizer.zero_grad()
             
             if self.scaler is not None:
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast('cuda'):
                     outputs = self.model(sequences)
                     loss = self.criterion(outputs, targets)
                 

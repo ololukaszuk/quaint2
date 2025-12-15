@@ -44,8 +44,23 @@ RUN pip install --no-cache-dir onnxruntime-gpu==1.19.2
 # Install remaining Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy training code
-COPY . .
+# Create the training package directory structure
+RUN mkdir -p /app/training/scripts
+
+# Copy training code into the training/ package directory
+COPY __init__.py /app/training/
+COPY config.py /app/training/
+COPY data_loader.py /app/training/
+COPY trainer.py /app/training/
+COPY evaluator.py /app/training/
+COPY export_models.py /app/training/
+COPY feature_engineering.py /app/training/
+COPY lightgbm_models.py /app/training/
+COPY mamba_model.py /app/training/
+COPY metrics.py /app/training/
+COPY predictor.py /app/training/
+COPY scripts/__init__.py /app/training/scripts/
+COPY scripts/daily_retrain.py /app/training/scripts/
 
 # Create models output directory
 RUN mkdir -p /app/models
