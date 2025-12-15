@@ -7,7 +7,7 @@ Loads candle data from TimescaleDB and prepares it for training.
 import asyncio
 import asyncpg
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Tuple, Optional, List
 import logging
 
@@ -20,6 +20,29 @@ from .feature_engineering import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def check_array_health(arr: np.ndarray, name: str) -> None:
+    """Check array for NaN/Inf and log statistics."""
+    nan_count = np.isnan(arr).sum()
+    inf_count = np.isinf(arr).sum()
+    
+    if nan_count > 0 or inf_count > 0:
+        logger.warning(f"{name}: NaN count={nan_count}, Inf count={inf_count}")
+    
+    if arr.size > 0:
+        finite_arr = arr[np.isfinite(arr)]
+        if finite_arr.size > 0:
+            logger.debug(f"{name}: min={finite_arr.min():.6f}, max={finite_arr.max():.6f}, mean={finite_arr.mean():.6f}")
+
+
+def sanitize_array(arr: np.ndarray, fill_value: float = 0.0) -> np.ndarray:
+    """Replace NaN and Inf values with fill_value."""
+    result = arr.copy()
+    mask = ~np.isfinite(result)
+    if mask.any():
+        result[mask] = fill_value
+    return result
 
 
 class DataLoader:
@@ -48,6 +71,17 @@ class DataLoader:
             await self.pool.close()
             logger.info("Database connection closed")
     
+    async def get_data_range(self) -> Tuple[datetime, datetime]:
+        """Get the actual data range available in the database."""
+        query = """
+            SELECT MIN(time) as min_time, MAX(time) as max_time
+            FROM candles_1m
+        """
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(query)
+        
+        return row['min_time'], row['max_time']
+    
     async def fetch_candles(
         self,
         start_time: Optional[datetime] = None,
@@ -65,10 +99,20 @@ class DataLoader:
         Returns:
             Tuple of numpy arrays for each field
         """
+        # Get actual data range first
+        actual_min, actual_max = await self.get_data_range()
+        logger.info(f"Database contains data from {actual_min} to {actual_max}")
+        
         if end_time is None:
-            end_time = datetime.utcnow()
+            end_time = datetime.now(timezone.utc)
         if start_time is None:
             start_time = end_time - timedelta(days=months * 30)
+        
+        # Adjust start_time to actual data availability
+        if start_time < actual_min:
+            logger.warning(f"Requested start {start_time} is before data availability {actual_min}")
+            start_time = actual_min
+            logger.info(f"Adjusted start time to {start_time}")
         
         query = """
             SELECT 
@@ -99,17 +143,25 @@ class DataLoader:
         
         # Convert to numpy arrays
         times = np.array([row['time'] for row in rows])
-        opens = np.array([float(row['open']) for row in rows])
-        highs = np.array([float(row['high']) for row in rows])
-        lows = np.array([float(row['low']) for row in rows])
-        closes = np.array([float(row['close']) for row in rows])
-        volumes = np.array([float(row['volume']) for row in rows])
-        quote_asset_volumes = np.array([float(row['quote_asset_volume']) for row in rows])
-        taker_buy_base_asset_volumes = np.array([float(row['taker_buy_base_asset_volume']) for row in rows])
-        taker_buy_quote_asset_volumes = np.array([float(row['taker_buy_quote_asset_volume']) for row in rows])
-        number_of_trades = np.array([float(row['number_of_trades']) for row in rows])
-        spread_bps = np.array([float(row['spread_bps']) for row in rows])
-        taker_buy_ratio = np.array([float(row['taker_buy_ratio']) for row in rows])
+        opens = np.array([float(row['open']) for row in rows], dtype=np.float64)
+        highs = np.array([float(row['high']) for row in rows], dtype=np.float64)
+        lows = np.array([float(row['low']) for row in rows], dtype=np.float64)
+        closes = np.array([float(row['close']) for row in rows], dtype=np.float64)
+        volumes = np.array([float(row['volume']) for row in rows], dtype=np.float64)
+        quote_asset_volumes = np.array([float(row['quote_asset_volume']) for row in rows], dtype=np.float64)
+        taker_buy_base_asset_volumes = np.array([float(row['taker_buy_base_asset_volume']) for row in rows], dtype=np.float64)
+        taker_buy_quote_asset_volumes = np.array([float(row['taker_buy_quote_asset_volume']) for row in rows], dtype=np.float64)
+        number_of_trades = np.array([float(row['number_of_trades']) for row in rows], dtype=np.float64)
+        spread_bps = np.array([float(row['spread_bps']) for row in rows], dtype=np.float64)
+        taker_buy_ratio = np.array([float(row['taker_buy_ratio']) for row in rows], dtype=np.float64)
+        
+        # Check raw data health
+        logger.info("Checking raw data health...")
+        check_array_health(opens, "opens")
+        check_array_health(highs, "highs")
+        check_array_health(lows, "lows")
+        check_array_health(closes, "closes")
+        check_array_health(volumes, "volumes")
         
         return (
             times,
@@ -164,8 +216,31 @@ class DataLoader:
         
         logger.info(f"Computed features shape: {features.shape}")
         
+        # Check features health before normalization
+        nan_count = np.isnan(features).sum()
+        inf_count = np.isinf(features).sum()
+        if nan_count > 0 or inf_count > 0:
+            logger.warning(f"Features contain NaN={nan_count}, Inf={inf_count}")
+            # Log which columns have issues
+            for col in range(features.shape[1]):
+                col_nan = np.isnan(features[:, col]).sum()
+                col_inf = np.isinf(features[:, col]).sum()
+                if col_nan > 0 or col_inf > 0:
+                    logger.warning(f"  Column {col}: NaN={col_nan}, Inf={col_inf}")
+            
+            # Sanitize features
+            logger.info("Sanitizing features (replacing NaN/Inf with 0)...")
+            features = sanitize_array(features, fill_value=0.0)
+        
         # Compute targets
         targets = compute_targets(closes, PREDICTION_HORIZONS)
+        
+        # Check targets health
+        target_nan = np.isnan(targets).sum()
+        target_inf = np.isinf(targets).sum()
+        if target_nan > 0 or target_inf > 0:
+            logger.warning(f"Targets contain NaN={target_nan}, Inf={target_inf}")
+            targets = sanitize_array(targets, fill_value=0.0)
         
         # Split data chronologically
         n = len(features)
@@ -188,6 +263,14 @@ class DataLoader:
         train_features_norm, mean, std = normalize_features(train_features)
         val_features_norm, _, _ = normalize_features(val_features, mean, std)
         test_features_norm, _, _ = normalize_features(test_features, mean, std)
+        
+        # Final sanity check after normalization
+        for name, arr in [("train_norm", train_features_norm), 
+                          ("val_norm", val_features_norm), 
+                          ("test_norm", test_features_norm)]:
+            if not np.isfinite(arr).all():
+                logger.error(f"{name} still contains non-finite values after normalization!")
+                arr = sanitize_array(arr, fill_value=0.0)
         
         norm_params = {
             'mean': mean.tolist(),
@@ -214,26 +297,32 @@ class DataLoader:
         min_test = min(len(test_sequences), len(test_seq_targets))
         
         train_data = {
-            'sequences': train_sequences[:min_train],
-            'targets': train_seq_targets[:min_train],
+            'sequences': train_sequences[:min_train].astype(np.float32),
+            'targets': train_seq_targets[:min_train].astype(np.float32),
             'times': train_seq_times[:min_train],
         }
         
         val_data = {
-            'sequences': val_sequences[:min_val],
-            'targets': val_seq_targets[:min_val],
+            'sequences': val_sequences[:min_val].astype(np.float32),
+            'targets': val_seq_targets[:min_val].astype(np.float32),
             'times': val_seq_times[:min_val],
         }
         
         test_data = {
-            'sequences': test_sequences[:min_test],
-            'targets': test_seq_targets[:min_test],
+            'sequences': test_sequences[:min_test].astype(np.float32),
+            'targets': test_seq_targets[:min_test].astype(np.float32),
             'times': test_seq_times[:min_test],
         }
         
+        # Final verification
         logger.info(f"Training samples: {len(train_data['sequences'])}")
         logger.info(f"Validation samples: {len(val_data['sequences'])}")
         logger.info(f"Test samples: {len(test_data['sequences'])}")
+        
+        for name, data_dict in [("train", train_data), ("val", val_data), ("test", test_data)]:
+            seq_finite = np.isfinite(data_dict['sequences']).all()
+            tgt_finite = np.isfinite(data_dict['targets']).all()
+            logger.info(f"{name}: sequences_finite={seq_finite}, targets_finite={tgt_finite}")
         
         return train_data, val_data, test_data, norm_params
 

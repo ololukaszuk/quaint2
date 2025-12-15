@@ -166,29 +166,36 @@ def compute_rsi(closes: np.ndarray, period: int = 14) -> np.ndarray:
     return result
 
 
-def compute_vwap(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, volumes: np.ndarray) -> np.ndarray:
+def compute_vwap(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, volumes: np.ndarray, period: int = 20) -> np.ndarray:
     """
-    Compute Volume Weighted Average Price (session-based, using rolling window).
+    Compute Volume Weighted Average Price (rolling window to prevent overflow).
     
     Args:
         highs: High prices
         lows: Low prices
         closes: Close prices
         volumes: Volumes
+        period: Rolling window period (default 20)
         
     Returns:
         VWAP array
     """
-    typical_price = (highs + lows + closes) / 3
+    typical_price = (highs + lows + closes) / 3.0
+    tp_vol = typical_price * volumes
     
-    # Use cumulative for session VWAP (reset daily would need timestamps)
-    cum_tp_vol = np.cumsum(typical_price * volumes)
-    cum_vol = np.cumsum(volumes)
+    # Use rolling window instead of cumulative to prevent overflow
+    n = len(closes)
+    vwap = np.zeros(n, dtype=np.float64)
     
-    # Avoid division by zero
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        vwap = np.where(cum_vol > 0, cum_tp_vol / cum_vol, closes)
+    for i in range(n):
+        start_idx = max(0, i - period + 1)
+        window_tp_vol = tp_vol[start_idx:i+1].sum()
+        window_vol = volumes[start_idx:i+1].sum()
+        
+        if window_vol > 0:
+            vwap[i] = window_tp_vol / window_vol
+        else:
+            vwap[i] = closes[i]
     
     return vwap
 

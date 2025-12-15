@@ -36,9 +36,13 @@ class MambaTrainer:
         self.device = torch.device(device)
         self.model = create_mamba_model(config).to(self.device)
         
+        # Use lower learning rate to prevent NaN (1e-4 is safer for Mamba)
+        effective_lr = min(config.learning_rate, 1e-4)
+        logger.info(f"Using learning rate: {effective_lr}")
+        
         self.optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=config.learning_rate,
+            lr=effective_lr,
             weight_decay=config.weight_decay,
         )
         
