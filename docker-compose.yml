@@ -142,31 +142,34 @@ services:
         max-file: "10"
 
   # ============================================================================
-  # ML LAYER 1 SERVICES
+  # ML Layer 1 - Training Service (on-demand, GPU)
   # ============================================================================
-
-  # ML Training Service - Daily model retraining (03:00 UTC)
-  # Run manually: docker-compose run ml-trainer
-  # Or schedule via cron/k8s CronJob
   ml-trainer:
     build:
       context: ./ml-layer-1/training
       dockerfile: Dockerfile
     container_name: btc-ml-trainer
+    profiles:
+      - ml-training
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       - DB_HOST=timescaledb
       - DB_PORT=5432
       - DB_NAME=btc_ml_production
       - DB_USER=mltrader
       - DB_PASSWORD=${DB_PASSWORD}
-      - TRAINING_MONTHS=${TRAINING_MONTHS:-13}
-      - VALIDATION_DAYS=${VALIDATION_DAYS:-30}
-      - TEST_DAYS=${TEST_DAYS:-7}
-      - BATCH_SIZE=${ML_BATCH_SIZE:-32}
+      - ML_DEVICE=${ML_DEVICE:-cuda}
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+      - PYTHONUNBUFFERED=1
+      - TRAINING_MONTHS=${TRAINING_MONTHS:-12}
       - MAMBA_EPOCHS=${MAMBA_EPOCHS:-50}
-      - MAMBA_LEARNING_RATE=${MAMBA_LEARNING_RATE:-0.001}
-      - MODELS_DIR=/app/models
-      - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ml_models:/app/models
     depends_on:
@@ -174,22 +177,31 @@ services:
         condition: service_healthy
     networks:
       - btc-ml-network
-    profiles:
-      - ml-training
     restart: "no"
     logging:
       driver: "json-file"
       options:
-        max-size: "50m"
+        max-size: "100m"
         max-file: "5"
 
-  # ML Inference Service - Standalone (optional)
-  # Only needed if not using inference integrated in data-feeder
+  # ============================================================================
+  # ML Layer 1 - Inference Service (always-on, GPU)
+  # ============================================================================
   ml-inference:
     build:
       context: ./ml-layer-1/inference
       dockerfile: Dockerfile
     container_name: btc-ml-inference
+    profiles:
+      - ml-inference
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       - DB_HOST=timescaledb
       - DB_PORT=5432
@@ -197,16 +209,17 @@ services:
       - DB_USER=mltrader
       - DB_PASSWORD=${DB_PASSWORD}
       - ML_ENABLED=${ML_ENABLED:-true}
+      - ML_DEVICE=${ML_DEVICE:-cuda}
+      - ML_MAMBA_WEIGHT=${ML_MAMBA_WEIGHT:-0.5}
+      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+      - RUST_LOG=${LOG_LEVEL:-info}
       - ML_MAMBA_MODEL_PATH=/app/models/mamba.pt
       - ML_LGBM_MODELS_DIR=/app/models
-      - ML_NORM_PARAMS_PATH=/app/models/normalization_params_v1.json
-      - ML_MAMBA_WEIGHT=${ML_MAMBA_WEIGHT:-0.5}
-      - ML_DEVICE=${ML_DEVICE:-cpu}
-      - RUST_LOG=${LOG_LEVEL:-info}
-    volumes:
-      - ml_models:/app/models:ro
+      - ML_NORM_PARAMS_PATH=/app/models/normalization_params.json
     ports:
       - "${ML_INFERENCE_PORT:-8081}:8081"
+    volumes:
+      - ml_models:/app/models:ro
     depends_on:
       timescaledb:
         condition: service_healthy
@@ -218,13 +231,11 @@ services:
       start_period: 60s
     networks:
       - btc-ml-network
-    profiles:
-      - ml-inference
     restart: unless-stopped
     logging:
       driver: "json-file"
       options:
-        max-size: "50m"
+        max-size: "100m"
         max-file: "5"
 
 volumes:

@@ -146,8 +146,16 @@ pub struct LightGBMModel {
 impl LightGBMModel {
     /// Load all horizon models from ONNX files
     pub fn load(models_dir: &str) -> Result<Self, ModelError> {
+        use ort::{Environment, SessionBuilder, GraphOptimizationLevel};
+        
         let input_size = SEQUENCE_LENGTH * NUM_FEATURES;
         let mut sessions = Vec::with_capacity(NUM_HORIZONS);
+
+        // Initialize ONNX Runtime environment
+        let environment = Environment::builder()
+            .with_name("lgbm_inference")
+            .build()
+            .map_err(|e| ModelError::LoadError(e.to_string()))?;
 
         for h in 1..=NUM_HORIZONS {
             let path = format!("{}/lgbm_horizon_{}.onnx", models_dir, h);
@@ -156,11 +164,13 @@ impl LightGBMModel {
                 return Err(ModelError::FileNotFound(path));
             }
 
-            let session = ort::Session::builder()
+            let session = SessionBuilder::new(&environment)
+                .map_err(|e| ModelError::LoadError(e.to_string()))?
+                .with_optimization_level(GraphOptimizationLevel::Level3)
                 .map_err(|e| ModelError::LoadError(e.to_string()))?
                 .with_intra_threads(1)
                 .map_err(|e| ModelError::LoadError(e.to_string()))?
-                .commit_from_file(&path)
+                .with_model_from_file(&path)
                 .map_err(|e| ModelError::LoadError(e.to_string()))?;
 
             sessions.push(session);
@@ -178,6 +188,8 @@ impl LightGBMModel {
 #[cfg(feature = "ml-inference")]
 impl Model for LightGBMModel {
     fn predict(&self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
+        use ort::tensor::OrtOwnedTensor;
+        
         let start = std::time::Instant::now();
 
         // Flatten input: (seq_len * num_features,)
@@ -199,15 +211,12 @@ impl Model for LightGBMModel {
             let input_array = ndarray::Array::from_shape_vec((1, self.input_size), flat.clone())
                 .map_err(|e| ModelError::InferenceError(e.to_string()))?;
 
-            let outputs = session
-                .run(ort::inputs!["input" => input_array.view()].unwrap())
+            let outputs: Vec<OrtOwnedTensor<f32, _>> = session
+                .run(vec![input_array])
                 .map_err(|e| ModelError::InferenceError(e.to_string()))?;
 
-            let output = outputs[0]
-                .try_extract_tensor::<f32>()
-                .map_err(|e| ModelError::InferenceError(e.to_string()))?;
-
-            predictions.push(output.view().iter().next().copied().unwrap_or(0.0) as f64);
+            let output_view = outputs[0].view();
+            predictions.push(output_view.iter().next().copied().unwrap_or(0.0) as f64);
         }
 
         let latency_ms = start.elapsed().as_secs_f64() * 1000.0;

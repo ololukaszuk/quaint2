@@ -16,11 +16,16 @@ name = "ml-inference"
 path = "src/main.rs"
 
 [dependencies]
-# PyTorch (TorchScript)
+# PyTorch (TorchScript) - CUDA support
 tch = { version = "0.14", optional = true }
 
-# ONNX Runtime
-ort = { version = "1.16", optional = true }
+# ONNX Runtime - stable version 1.14 (last stable, 1.16 yanked)
+ort = { version = "1.14", optional = true }
+
+# Pin transitive dependencies to avoid edition2024 issues
+base64ct = "1.6"
+base64 = "0.21"
+http = "0.2"
 
 # Async runtime
 tokio = { version = "1.35", features = ["full", "signal"] }
