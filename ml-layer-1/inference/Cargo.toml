@@ -19,11 +19,12 @@ path = "src/main.rs"
 # PyTorch (TorchScript) - CUDA support
 tch = { version = "0.14", optional = true }
 
-# ONNX Runtime - stable version 1.14 (last stable, 1.16 yanked)
-ort = { version = "1.14", optional = true }
+# ONNX Runtime - use latest prerelease 2.0.0-rc.10
+ort = { version = "2.0.0-rc.10", optional = true }
 
 # Pin transitive dependencies to avoid edition2024 issues
-base64ct = "1.6"
+# Use <1.7 to avoid edition2024 requirement
+base64ct = "<1.7"
 base64 = "0.21"
 http = "0.2"
 

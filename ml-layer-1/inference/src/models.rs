@@ -6,10 +6,9 @@
 use parking_lot::RwLock;
 use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::Arc;
 use thiserror::Error;
 use tokio_postgres::Client;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::config::InferenceConfig;
 use crate::features::{NormalizationParams, NUM_FEATURES, NUM_HORIZONS, SEQUENCE_LENGTH};
@@ -48,7 +47,7 @@ pub struct ModelPrediction {
 /// Trait for ML models
 pub trait Model: Send + Sync {
     /// Run inference on input sequence
-    fn predict(&self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError>;
+    fn predict(&mut self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError>;
 
     /// Check if model is loaded
     fn is_loaded(&self) -> bool;
@@ -89,7 +88,7 @@ impl MambaModel {
 
 #[cfg(feature = "ml-inference")]
 impl Model for MambaModel {
-    fn predict(&self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
+    fn predict(&mut self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
         let start = std::time::Instant::now();
 
         // Convert input to tensor: (1, seq_len, num_features)
@@ -102,7 +101,9 @@ impl Model for MambaModel {
             .flat_map(|row| row.iter().map(|&x| x as f32))
             .collect();
 
-        let tensor = tch::Tensor::of_slice(&flat)
+        // tch 0.14: Use Tensor::from_slice instead of deprecated of_slice
+        // from_slice is the infallible version; use f_from_slice for Result
+        let tensor = tch::Tensor::from_slice(&flat)
             .view([1, seq_len as i64, num_features as i64])
             .to_device(self.device);
 
@@ -112,11 +113,15 @@ impl Model for MambaModel {
             .forward_ts(&[tensor])
             .map_err(|e| ModelError::InferenceError(e.to_string()))?;
 
-        // Extract predictions
-        let predictions: Vec<f64> = Vec::<f32>::from(&output)
-            .iter()
-            .map(|&x| x as f64)
-            .collect();
+        // tch 0.14: Extract predictions using copy_data or flatten + vec conversion
+        // The output tensor needs to be on CPU and contiguous for extraction
+        let output_cpu = output.to_device(tch::Device::Cpu).contiguous();
+        let numel = output_cpu.numel() as usize;
+        let mut predictions_f32: Vec<f32> = vec![0.0; numel];
+        output_cpu.copy_data(&mut predictions_f32, numel);
+        
+        // Convert f32 to f64
+        let predictions: Vec<f64> = predictions_f32.iter().map(|&x| x as f64).collect();
 
         let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
 
@@ -136,26 +141,28 @@ impl Model for MambaModel {
 }
 
 /// LightGBM model wrapper (ONNX Runtime)
+/// 
+/// ort 2.0.0-rc.x: Session is now in ort::session::Session
+/// and session builder pattern changed significantly
 #[cfg(feature = "ml-inference")]
 pub struct LightGBMModel {
-    sessions: Vec<ort::Session>,
+    sessions: Vec<ort::session::Session>,
     input_size: usize,
 }
 
 #[cfg(feature = "ml-inference")]
 impl LightGBMModel {
     /// Load all horizon models from ONNX files
+    /// 
+    /// ort 2.0: The API changed significantly:
+    /// - No more Environment::builder(), use Session::builder() directly
+    /// - GraphOptimizationLevel moved to ort::session::builder::GraphOptimizationLevel
+    /// - Use commit_from_file instead of with_model_from_file
     pub fn load(models_dir: &str) -> Result<Self, ModelError> {
-        use ort::{Environment, SessionBuilder, GraphOptimizationLevel};
+        use ort::session::{builder::GraphOptimizationLevel, Session};
         
         let input_size = SEQUENCE_LENGTH * NUM_FEATURES;
         let mut sessions = Vec::with_capacity(NUM_HORIZONS);
-
-        // Initialize ONNX Runtime environment
-        let environment = Environment::builder()
-            .with_name("lgbm_inference")
-            .build()
-            .map_err(|e| ModelError::LoadError(e.to_string()))?;
 
         for h in 1..=NUM_HORIZONS {
             let path = format!("{}/lgbm_horizon_{}.onnx", models_dir, h);
@@ -164,13 +171,15 @@ impl LightGBMModel {
                 return Err(ModelError::FileNotFound(path));
             }
 
-            let session = SessionBuilder::new(&environment)
+            // ort 2.0: Session::builder() creates a SessionBuilder directly
+            // No environment needed - it's handled globally
+            let session = Session::builder()
                 .map_err(|e| ModelError::LoadError(e.to_string()))?
                 .with_optimization_level(GraphOptimizationLevel::Level3)
                 .map_err(|e| ModelError::LoadError(e.to_string()))?
                 .with_intra_threads(1)
                 .map_err(|e| ModelError::LoadError(e.to_string()))?
-                .with_model_from_file(&path)
+                .commit_from_file(&path)
                 .map_err(|e| ModelError::LoadError(e.to_string()))?;
 
             sessions.push(session);
@@ -187,8 +196,8 @@ impl LightGBMModel {
 
 #[cfg(feature = "ml-inference")]
 impl Model for LightGBMModel {
-    fn predict(&self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
-        use ort::tensor::OrtOwnedTensor;
+    fn predict(&mut self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
+        use ort::value::Tensor;
         
         let start = std::time::Instant::now();
 
@@ -207,16 +216,25 @@ impl Model for LightGBMModel {
 
         let mut predictions = Vec::with_capacity(NUM_HORIZONS);
 
-        for session in &self.sessions {
-            let input_array = ndarray::Array::from_shape_vec((1, self.input_size), flat.clone())
+        for session in &mut self.sessions {
+            // ort 2.0: Create input tensor using (shape, data) tuple format
+            // Shape is (1, input_size) for batch size 1
+            let input_tensor = Tensor::from_array(([1usize, self.input_size], flat.clone()))
                 .map_err(|e| ModelError::InferenceError(e.to_string()))?;
 
-            let outputs: Vec<OrtOwnedTensor<f32, _>> = session
-                .run(vec![input_array])
+            // ort 2.0: Run using ort::inputs! macro - it returns an array directly
+            let outputs = session
+                .run(ort::inputs![input_tensor])
                 .map_err(|e| ModelError::InferenceError(e.to_string()))?;
 
-            let output_view = outputs[0].view();
-            predictions.push(output_view.iter().next().copied().unwrap_or(0.0) as f64);
+            // ort 2.0: Extract tensor data using try_extract_tensor
+            // Returns (&Shape, &[T]) tuple
+            let (_, output_data) = outputs[0]
+                .try_extract_tensor::<f32>()
+                .map_err(|e| ModelError::InferenceError(e.to_string()))?;
+            
+            // Get the first element as the prediction
+            predictions.push(output_data.first().copied().unwrap_or(0.0) as f64);
         }
 
         let latency_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -250,7 +268,7 @@ impl StubModel {
 }
 
 impl Model for StubModel {
-    fn predict(&self, _input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
+    fn predict(&mut self, _input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
         Ok(ModelPrediction {
             predictions: vec![0.0; NUM_HORIZONS],
             latency_ms: 0.0,
@@ -412,8 +430,8 @@ impl ModelManager {
     /// Run Mamba prediction
     #[cfg(feature = "ml-inference")]
     pub fn predict_mamba(&self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
-        let guard = self.mamba.read();
-        match guard.as_ref() {
+        let mut guard = self.mamba.write();
+        match guard.as_mut() {
             Some(model) => model.predict(input),
             None => Ok(ModelPrediction {
                 predictions: vec![0.0; NUM_HORIZONS],
@@ -425,8 +443,8 @@ impl ModelManager {
     /// Run LightGBM prediction
     #[cfg(feature = "ml-inference")]
     pub fn predict_lgbm(&self, input: &[Vec<f64>]) -> Result<ModelPrediction, ModelError> {
-        let guard = self.lgbm.read();
-        match guard.as_ref() {
+        let mut guard = self.lgbm.write();
+        match guard.as_mut() {
             Some(model) => model.predict(input),
             None => Ok(ModelPrediction {
                 predictions: vec![0.0; NUM_HORIZONS],
