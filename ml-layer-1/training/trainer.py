@@ -149,9 +149,10 @@ class MambaTrainer:
         """Train for one epoch."""
         self.model.train()
         total_loss = 0.0
-        num_batches = 0
+        num_batches = len(dataloader)
+        log_interval = max(1, num_batches // 10)  # Log ~10 times per epoch
         
-        for sequences, targets in dataloader:
+        for batch_idx, (sequences, targets) in enumerate(dataloader):
             sequences = sequences.to(self.device)
             targets = targets.to(self.device)
             
@@ -175,7 +176,12 @@ class MambaTrainer:
                 self.optimizer.step()
             
             total_loss += loss.item()
-            num_batches += 1
+            
+            # Log progress periodically
+            if (batch_idx + 1) % log_interval == 0 or batch_idx == 0:
+                avg_loss = total_loss / (batch_idx + 1)
+                progress = 100.0 * (batch_idx + 1) / num_batches
+                logger.info(f"  Batch {batch_idx + 1}/{num_batches} ({progress:.0f}%) - loss: {avg_loss:.6f}")
         
         return total_loss / num_batches
     
