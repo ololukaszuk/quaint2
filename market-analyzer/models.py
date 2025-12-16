@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import numpy as np
 import logging
+import warnings
+
+# Suppress NumPy's timezone warning - we handle UTC explicitly via _ensure_utc()
+warnings.filterwarnings('ignore', message='no explicit representation of timezones available for np.datetime64')
 
 logger = logging.getLogger(__name__)
 
