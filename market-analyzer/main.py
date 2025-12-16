@@ -12,6 +12,7 @@ import signal
 import sys
 from datetime import datetime, timezone
 from typing import Optional
+import numpy as np
 
 from loguru import logger
 
@@ -30,6 +31,17 @@ logger.add(
     colorize=True,
 )
 
+def to_python(value):
+    """Convert NumPy types to Python native types for PostgreSQL."""
+    if value is None:
+        return None
+    if isinstance(value, (np.integer, np.int64, np.int32, np.int16)):
+        return int(value)
+    if isinstance(value, (np.floating, np.float64, np.float32)):
+        return float(value)
+    if isinstance(value, np.bool_):
+        return bool(value)
+    return value
 
 class MarketAnalyzerService:
     """Main service that orchestrates market analysis."""
@@ -235,31 +247,31 @@ class MarketAnalyzerService:
                     )
                     """,
                     ctx.timestamp,
-                    ctx.current_price,
+                    to_python(ctx.current_price),
                     signal.signal_type.value if signal else "NEUTRAL",
                     signal.direction if signal else "NONE",
-                    signal.confidence if signal else 0,
-                    signal.setup.entry if signal and signal.setup else None,
-                    signal.setup.stop_loss if signal and signal.setup else None,
-                    signal.setup.take_profit_1 if signal and signal.setup else None,
-                    signal.setup.take_profit_2 if signal and signal.setup else None,
-                    signal.setup.take_profit_3 if signal and signal.setup else None,
-                    signal.setup.risk_reward_ratio if signal and signal.setup else None,
+                    to_python(signal.confidence if signal else 0),
+                    to_python(signal.setup.entry if signal and signal.setup else None),
+                    to_python(signal.setup.stop_loss if signal and signal.setup else None),
+                    to_python(signal.setup.take_profit_1 if signal and signal.setup else None),
+                    to_python(signal.setup.take_profit_2 if signal and signal.setup else None),
+                    to_python(signal.setup.take_profit_3 if signal and signal.setup else None),
+                    to_python(signal.setup.risk_reward_ratio if signal and signal.setup else None),
                     trends_json,
-                    nearest_support,
-                    nearest_resistance,
-                    support_strength,
-                    resistance_strength,
+                    to_python(nearest_support),
+                    to_python(nearest_resistance),
+                    to_python(support_strength),
+                    to_python(resistance_strength),
                     ctx.smc.current_bias if ctx.smc else None,
                     self.get_price_zone(ctx),
-                    ctx.smc.equilibrium if ctx.smc else None,
-                    ctx.pivots.traditional.pivot if ctx.pivots else None,
+                    to_python(ctx.smc.equilibrium if ctx.smc else None),
+                    to_python(ctx.pivots.traditional.pivot if ctx.pivots else None),
                     "ABOVE" if ctx.pivots and ctx.current_price > ctx.pivots.traditional.pivot else "BELOW",
-                    rsi_1h_val,
-                    vol_1h,
+                    to_python(rsi_1h_val),
+                    to_python(vol_1h),
                     summary,
                     signal_changed,
-                    previous_type  # ✅ Use passed parameter instead of self.previous_signal_type
+                    previous_type
                 )
                 
                 # If signal changed, also insert into market_signals
@@ -278,16 +290,16 @@ class MarketAnalyzerService:
                         ctx.timestamp,
                         signal.signal_type.value,
                         signal.direction,
-                        signal.confidence,
-                        ctx.current_price,
-                        signal.setup.entry if signal.setup else None,
-                        signal.setup.stop_loss if signal.setup else None,
-                        signal.setup.take_profit_1 if signal.setup else None,
-                        signal.setup.take_profit_2 if signal.setup else None,
-                        signal.setup.take_profit_3 if signal.setup else None,
-                        signal.setup.risk_reward_ratio if signal.setup else None,
-                        previous_type,       # ✅ Use passed parameter
-                        previous_direction,  # ✅ Use passed parameter
+                        to_python(signal.confidence),
+                        to_python(ctx.current_price),
+                        to_python(signal.setup.entry if signal.setup else None),
+                        to_python(signal.setup.stop_loss if signal.setup else None),
+                        to_python(signal.setup.take_profit_1 if signal.setup else None),
+                        to_python(signal.setup.take_profit_2 if signal.setup else None),
+                        to_python(signal.setup.take_profit_3 if signal.setup else None),
+                        to_python(signal.setup.risk_reward_ratio if signal.setup else None),
+                        previous_type,
+                        previous_direction,
                         summary,
                         reasons_array
                     )
