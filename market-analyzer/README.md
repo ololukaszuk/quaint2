@@ -143,7 +143,7 @@ Environment variables:
 | `DB_USER` | mltrader | Database user |
 | `DB_PASSWORD` | (required) | Database password |
 | `POLL_INTERVAL` | 5 | Seconds between candle checks |
-| `LOOKBACK_CANDLES` | 500 | Candles per timeframe for analysis |
+| `LOOKBACK_CANDLES` | 300000 | Candles per timeframe for analysis |
 | `HEALTH_PORT` | 8082 | Health check HTTP port |
 
 ## Running
