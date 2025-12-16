@@ -238,6 +238,39 @@ services:
         max-size: "100m"
         max-file: "5"
 
+  # ============================================================================
+  # Market Analyzer - Real-time market context analysis
+  # ============================================================================
+  market-analyzer:
+    build:
+      context: ./market-analyzer
+      dockerfile: Dockerfile
+    container_name: btc-ml-market-analyzer
+    environment:
+      - DB_HOST=timescaledb
+      - DB_PORT=5432
+      - DB_NAME=btc_ml_production
+      - DB_USER=mltrader
+      - DB_PASSWORD=${DB_PASSWORD}
+      - POLL_INTERVAL=${ANALYZER_POLL_INTERVAL:-5}
+      - LOOKBACK_CANDLES=${ANALYZER_LOOKBACK_CANDLES:-500}
+      - HEALTH_PORT=8082
+    ports:
+      - "${ANALYZER_PORT:-8082}:8082"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      data-feeder:
+        condition: service_started
+    networks:
+      - btc-ml-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
 volumes:
   timescaledb_data:
     driver: local
