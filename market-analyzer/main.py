@@ -231,37 +231,60 @@ class MarketAnalyzerService:
                 
                 # === 4. SMC DATA (complete) ===
                 smc_order_blocks = []
-                if ctx.smc and ctx.smc.order_blocks:
-                    for ob in ctx.smc.order_blocks:
-                        smc_order_blocks.append({
-                            "type": "bullish" if ob.is_bullish else "bearish",
-                            "low": float(ob.low),
-                            "high": float(ob.high),
-                            "strength": ob.strength,
-                            "distance_pct": abs((ob.high - ctx.current_price) / ctx.current_price * 100)
-                        })
-                
+                if ctx.smc:
+                    if ctx.smc.bullish_obs:
+                        for ob in ctx.smc.bullish_obs:
+                            smc_order_blocks.append({
+                                "type": "bullish",
+                                "low": float(ob.bottom),      # Use .bottom, not .low
+                                "high": float(ob.top),        # Use .top, not .high
+                                "strength": ob.strength,
+                                "distance_pct": abs((ob.top - ctx.current_price) / ctx.current_price * 100)
+                            })
+                    
+                    if ctx.smc.bearish_obs:
+                        for ob in ctx.smc.bearish_obs:
+                            smc_order_blocks.append({
+                                "type": "bearish",
+                                "low": float(ob.bottom),
+                                "high": float(ob.top),
+                                "strength": ob.strength,
+                                "distance_pct": abs((ctx.current_price - ob.bottom) / ctx.current_price * 100)
+                            })
+
                 smc_fvgs = []
-                if ctx.smc and ctx.smc.fvgs:
-                    for fvg in ctx.smc.fvgs:
-                        smc_fvgs.append({
-                            "type": "bullish" if fvg.is_bullish else "bearish",
-                            "low": float(fvg.low),
-                            "high": float(fvg.high),
-                            "unfilled": not fvg.filled
-                        })
-                
+                if ctx.smc:
+                    if ctx.smc.bullish_fvgs:  # Use bullish_fvgs, not fvgs
+                        for fvg in ctx.smc.bullish_fvgs:
+                            smc_fvgs.append({
+                                "type": "bullish",
+                                "low": float(fvg.bottom),
+                                "high": float(fvg.top),
+                                "unfilled": not fvg.filled
+                            })
+                    
+                    if ctx.smc.bearish_fvgs:  # Use bearish_fvgs
+                        for fvg in ctx.smc.bearish_fvgs:
+                            smc_fvgs.append({
+                                "type": "bearish",
+                                "low": float(fvg.bottom),
+                                "high": float(fvg.top),
+                                "unfilled": not fvg.filled
+                            })
+
                 smc_breaks = []
-                if ctx.smc and ctx.smc.choch:
-                    smc_breaks.append({
-                        "type": "CHoCH",
-                        "direction": "BULLISH" if ctx.smc.choch.is_bullish else "BEARISH",
-                        "price": float(ctx.smc.choch.price)
-                    })
-                
+                if ctx.smc and ctx.smc.structure_breaks:  # Use structure_breaks, not choch
+                    for brk in ctx.smc.structure_breaks:
+                        if brk.type == "CHOCH":
+                            smc_breaks.append({
+                                "type": "CHoCH",
+                                "direction": brk.direction,
+                                "price": float(brk.break_level)
+                            })
+
                 smc_liquidity = {
-                    "buy_side": [float(p) for p in ctx.smc.buy_side_liquidity] if ctx.smc else [],
-                    "sell_side": [float(p) for p in ctx.smc.sell_side_liquidity] if ctx.smc else []
+                    "buy_side": [float(p) for p in ctx.smc.buy_side_liquidity] if ctx.smc and ctx.smc.buy_side_liquidity else [],
+                    "sell_side": [float(p) for p in ctx.smc.sell_side_liquidity] if ctx.smc and ctx.smc.sell_side_liquidity else []
                 }
                 
                 # === 5. SUPPORT/RESISTANCE (all levels) ===
