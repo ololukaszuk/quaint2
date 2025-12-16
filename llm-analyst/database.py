@@ -49,15 +49,15 @@ class Database:
         
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT open_time FROM candles_1m ORDER BY open_time DESC LIMIT 1"
+                "SELECT time FROM candles_1m ORDER BY time DESC LIMIT 1"
             )
-            return row['open_time'] if row else None
+            return row['time'] if row else None
     
     async def get_candles_1h(self, limit: int = 120) -> List[Dict[str, Any]]:
         """
         Get aggregated 1H candles from 1m data.
         
-        Returns list of dicts with: open_time, open, high, low, close, volume
+        Returns list of dicts with: time, open, high, low, close, volume
         """
         if not self.pool:
             return []
@@ -66,15 +66,15 @@ class Database:
             rows = await conn.fetch(
                 """
                 SELECT 
-                    time_bucket('1 hour', open_time) AS open_time,
-                    FIRST(open, open_time) AS open,
+                    time_bucket('1 hour', time) AS open_time,
+                    FIRST(open, time) AS open,
                     MAX(high) AS high,
                     MIN(low) AS low,
-                    LAST(close, open_time) AS close,
+                    LAST(close, time) AS close,
                     SUM(volume) AS volume
                 FROM candles_1m
-                WHERE open_time > NOW() - INTERVAL '7 days'
-                GROUP BY time_bucket('1 hour', open_time)
+                WHERE time > NOW() - INTERVAL '7 days'
+                GROUP BY time_bucket('1 hour', time)
                 ORDER BY open_time DESC
                 LIMIT $1
                 """,
@@ -88,7 +88,7 @@ class Database:
         """
         Get aggregated 15m candles from 1m data.
         
-        Returns list of dicts with: open_time, open, high, low, close, volume
+        Returns list of dicts with: time, open, high, low, close, volume
         """
         if not self.pool:
             return []
@@ -97,15 +97,15 @@ class Database:
             rows = await conn.fetch(
                 """
                 SELECT 
-                    time_bucket('15 minutes', open_time) AS open_time,
-                    FIRST(open, open_time) AS open,
+                    time_bucket('15 minutes', time) AS open_time,
+                    FIRST(open, time) AS open,
                     MAX(high) AS high,
                     MIN(low) AS low,
-                    LAST(close, open_time) AS close,
+                    LAST(close, time) AS close,
                     SUM(volume) AS volume
                 FROM candles_1m
-                WHERE open_time > NOW() - INTERVAL '24 hours'
-                GROUP BY time_bucket('15 minutes', open_time)
+                WHERE time > NOW() - INTERVAL '24 hours'
+                GROUP BY time_bucket('15 minutes', time)
                 ORDER BY open_time DESC
                 LIMIT $1
                 """,
@@ -194,7 +194,7 @@ class Database:
         
         async with self.pool.acquire() as conn:
             count = await conn.fetchval(
-                "SELECT COUNT(*) FROM candles_1m WHERE open_time > $1",
+                "SELECT COUNT(*) FROM candles_1m WHERE time > $1",
                 since
             )
             return count or 0
