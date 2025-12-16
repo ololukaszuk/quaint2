@@ -328,7 +328,7 @@ services:
       - TLS_KEY_FILE=${DATA_API_TLS_KEY_FILE:-/certs/server.key}
     ports:
       - "${DATA_API_PORT:-8443}:${DATA_API_PORT:-8443}"
-    volumes:
+    #volumes:
       # Optional: mount custom certificates (uncomment for production)
       # - ./certs:/certs:ro
     depends_on:
