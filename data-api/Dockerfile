@@ -5,9 +5,9 @@ WORKDIR /build
 # Install dependencies
 RUN apk add --no-cache git
 
-# Copy go mod files
-COPY go.mod go.sum ./
-RUN go mod download
+# Work on go mod file
+COPY go.mod ./
+RUN go mod tidy
 
 # Copy source
 COPY main.go ./
