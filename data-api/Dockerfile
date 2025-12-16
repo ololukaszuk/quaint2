@@ -5,12 +5,12 @@ WORKDIR /build
 # Install dependencies
 RUN apk add --no-cache git
 
-# Work on go mod file
-COPY go.mod ./
-RUN go mod tidy
-
 # Copy source
 COPY main.go ./
+
+# Work on go mod file
+COPY go.mod ./
+RUN go mod tidy && go mod download
 
 # Build
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o data-api .
