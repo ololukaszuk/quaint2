@@ -2,6 +2,8 @@
 
 Secure REST API for accessing BTC trading data from TimescaleDB with **API Key authentication** and HTTPS support.
 
+> **🆕 Enhanced Schema v2.0:** This API now supports the enhanced database schema that captures 100% of market-analyzer log data. See [Database Schema](#database-schema) section for migration details.
+
 ## Features
 
 - 🔐 **API Key authentication** - Bearer token protection
@@ -295,39 +297,212 @@ curl -k "https://localhost:8443/api/v1/market-analysis?limit=10"
 curl -k "https://localhost:8443/api/v1/market-analysis?signal_type=STRONG_BUY"
 ```
 
-**Response Fields:**
+**Response Fields (Enhanced Schema v2.0):**
+
+After upgrading to the enhanced schema, the API returns complete log data:
+
 ```json
 {
   "id": 136,
   "analysis_time": "2025-12-16T20:12:00Z",
   "price": "87445.95000000",
+  
+  // Signal
   "signal_type": "WEAK_BUY",
   "signal_direction": "LONG",
   "signal_confidence": 44.23,
+  
+  // Trade setup
   "entry_price": null,
   "stop_loss": null,
   "take_profit_1": null,
   "take_profit_2": null,
   "take_profit_3": null,
   "risk_reward_ratio": null,
-  "trends": {"1d": {"strength": 0.4, "direction": "UPTREND"}, ...},
-  "nearest_support": "87338.97000000",
-  "nearest_resistance": "87553.05888889",
-  "support_strength": 0.72,
-  "resistance_strength": 0.54,
-  "smc_bias": "BULLISH",
-  "price_zone": "DISCOUNT",
-  "equilibrium_price": "87599.64000000",
-  "daily_pivot": "87210.45333333",
+  
+  // 🆕 Signal reasoning with weights (NEW in v2.0)
+  "signal_factors": [
+    {
+      "description": "At strong resistance $87,769 (0.03% away)",
+      "weight": -30,
+      "type": "bearish"
+    },
+    {
+      "description": "Bullish CHoCH - potential trend reversal up",
+      "weight": 30,
+      "type": "bullish"
+    }
+  ],
+  
+  // Enhanced trends with EMA and structure (v2.0)
+  "trends": {
+    "5m": {
+      "direction": "UPTREND",
+      "strength": 1.0,
+      "ema": "BULLISH",
+      "structure": "HH/HL"
+    },
+    "1h": {
+      "direction": "UPTREND",
+      "strength": 0.7,
+      "ema": "MIXED",
+      "structure": "HH/HL"
+    },
+    "4h": {
+      "direction": "DOWNTREND",
+      "strength": 1.0,
+      "ema": "BEARISH",
+      "structure": "LH/LL"
+    }
+  },
+  
+  // 🆕 Complete pivot data (NEW in v2.0)
+  "pivot_daily": "87210.45333333",
+  "pivot_r3_traditional": "94180.00",
+  "pivot_r2_traditional": "92116.00",
+  "pivot_r1_traditional": "89274.00",
+  "pivot_s1_traditional": "84368.00",
+  "pivot_s2_traditional": "82304.00",
+  "pivot_s3_traditional": "79462.00",
+  "pivot_r3_fibonacci": "92116.00",
+  "pivot_r2_fibonacci": "90242.00",
+  "pivot_r1_fibonacci": "89085.00",
+  "pivot_s1_fibonacci": "85336.00",
+  "pivot_s2_fibonacci": "84179.00",
+  "pivot_s3_fibonacci": "82304.00",
+  "pivot_r4_camarilla": "89130.00",
+  "pivot_r3_camarilla": "87781.00",
+  "pivot_s3_camarilla": "85083.00",
+  "pivot_s4_camarilla": "83734.00",
+  "pivot_confluence_zones": [
+    {
+      "price": 87332,
+      "type": "support",
+      "strength": 0.2,
+      "distance_pct": 0.46,
+      "methods": ["Camarilla"]
+    }
+  ],
   "price_vs_pivot": "ABOVE",
-  "rsi_1h": 52.76,
-  "volume_ratio_1h": 0.12,
+  
+  // 🆕 Complete SMC data (NEW in v2.0)
+  "smc_bias": "BULLISH",
+  "smc_price_zone": "DISCOUNT",
+  "smc_equilibrium": "87599.64000000",
+  "smc_order_blocks": [
+    {
+      "type": "bullish",
+      "low": 87132,
+      "high": 87588,
+      "strength": 1.0,
+      "distance_pct": 0.2
+    }
+  ],
+  "smc_fvgs": [
+    {
+      "type": "bullish",
+      "low": 86426,
+      "high": 86820,
+      "unfilled": true
+    }
+  ],
+  "smc_breaks": [
+    {
+      "type": "CHoCH",
+      "direction": "BULLISH",
+      "price": 86535
+    }
+  ],
+  "smc_liquidity": {
+    "buy_side": [87782, 87793, 87800],
+    "sell_side": [87607, 87537, 87338]
+  },
+  
+  // 🆕 All support/resistance levels (NEW in v2.0)
+  "support_levels": [
+    {
+      "price": 87556,
+      "strength": 0.62,
+      "touches": 11,
+      "timeframes": ["15m", "5m"],
+      "distance_pct": 0.21
+    },
+    {
+      "price": 87339,
+      "strength": 0.78,
+      "touches": 13,
+      "timeframes": ["5m"],
+      "distance_pct": 0.45
+    }
+  ],
+  "resistance_levels": [
+    {
+      "price": 87769,
+      "strength": 1.0,
+      "touches": 28,
+      "timeframes": ["15m", "5m"],
+      "distance_pct": 0.03
+    }
+  ],
+  
+  // 🆕 Momentum for all timeframes (NEW in v2.0)
+  "momentum": {
+    "5m": {
+      "rsi": 52.1,
+      "volume_ratio": 0.33,
+      "taker_buy_ratio": 0.67
+    },
+    "15m": {
+      "rsi": 54.9,
+      "volume_ratio": 0.19,
+      "taker_buy_ratio": 0.63
+    },
+    "1h": {
+      "rsi": 55.6,
+      "volume_ratio": 0.10,
+      "taker_buy_ratio": 0.55
+    },
+    "4h": {
+      "rsi": 44.2,
+      "volume_ratio": 0.30,
+      "taker_buy_ratio": 0.53
+    },
+    "1d": {
+      "rsi": 40.9,
+      "volume_ratio": 1.04,
+      "taker_buy_ratio": 0.49
+    }
+  },
+  
+  // 🆕 Market structure (NEW in v2.0)
+  "structure_pattern": "CONTRACTING",
+  "structure_last_high": "88175.98",
+  "structure_last_low": "86107.43",
+  
+  // 🆕 Warnings and alerts (NEW in v2.0)
+  "warnings": [
+    {
+      "type": "CLOSE_TO_SUPPORT",
+      "message": "CLOSE TO STRONG SUPPORT ($87,556) - Short risky before break!",
+      "severity": "high"
+    },
+    {
+      "type": "TREND_CONFLICT",
+      "message": "TREND CONFLICT: 15m=UPTREND, 4h=DOWNTREND - Be cautious!",
+      "severity": "medium"
+    }
+  ],
+  "action_recommendation": "WAIT",
+  
+  // Summary and metadata
   "summary": "BTC $87,446 - WEAK_BUY (44% confidence)...",
   "signal_changed": false,
   "previous_signal": "WEAK_BUY",
   "created_at": "2025-12-16T20:13:06.838209Z"
 }
 ```
+
+**Note:** Fields marked with 🆕 are available after applying the enhanced schema migration. See the [Database Schema](#database-schema) section below for migration instructions.
 
 ---
 
@@ -345,7 +520,7 @@ Get signal change events only (when signals shift).
 curl -k "https://localhost:8443/api/v1/market-signals?limit=50"
 ```
 
-**Response Fields:**
+**Response Fields (Enhanced Schema v2.0):**
 ```json
 {
   "id": 5,
@@ -363,14 +538,28 @@ curl -k "https://localhost:8443/api/v1/market-signals?limit=50"
   "previous_signal_type": "NEUTRAL",
   "previous_direction": "NONE",
   "summary": "BTC $87,560 - WEAK_BUY (41% confidence)...",
+  
+  // 🆕 Enhanced key_reasons with weights (JSONB in v2.0)
   "key_reasons": [
-    "At strong resistance $87,753 (0.22% away)",
-    "Bullish CHoCH - potential trend reversal up",
-    "4h trend: DOWNTREND (100% strength), EMA: BEARISH"
+    {
+      "description": "At strong resistance $87,753 (0.22% away)",
+      "weight": -30
+    },
+    {
+      "description": "Bullish CHoCH - potential trend reversal up",
+      "weight": 30
+    },
+    {
+      "description": "4h trend: DOWNTREND (100% strength), EMA: BEARISH",
+      "weight": -25
+    }
   ],
+  
   "created_at": "2025-12-16T20:12:06.649739Z"
 }
 ```
+
+**Note:** In schema v1.0, `key_reasons` was a simple text array. In v2.0, it's JSONB with weight information matching the log output.
 
 ---
 
@@ -851,6 +1040,129 @@ git add .env  # BAD! Use .env.example instead
 - `400 Bad Request` - Invalid parameters
 - `500 Internal Server Error` - Server/database error
 - `503 Service Unavailable` - Database connection failed
+
+---
+
+## Database Schema
+
+### Schema Versions
+
+**v1.0 (Original)**
+- Basic signal and trend data
+- Single nearest support/resistance levels
+- Limited momentum (1h only)
+- Simple text array for key_reasons
+
+**v2.0 (Enhanced - Current)**
+- ✅ Complete log data capture
+- ✅ All pivot methods with confluence zones
+- ✅ Complete SMC analysis (order blocks, FVGs, breaks, liquidity)
+- ✅ All support/resistance levels with metadata
+- ✅ Momentum indicators for all timeframes (5m, 15m, 1h, 4h, 1d)
+- ✅ Market structure patterns and swing points
+- ✅ Warnings and risk alerts
+- ✅ Weighted signal factors (matching log bar charts)
+- ✅ Enhanced key_reasons with weights (JSONB)
+
+### Migration to v2.0
+
+To upgrade your database to the enhanced schema:
+
+```bash
+# 1. Backup your database first!
+docker exec btc-ml-timescaledb pg_dump -U mltrader -d btc_ml_production > backup.sql
+
+# 2. Copy migration script
+docker cp migrations/migrate_to_enhanced_schema.sql btc-ml-timescaledb:/tmp/
+
+# 3. Apply migration
+docker exec -it btc-ml-timescaledb psql -U mltrader -d btc_ml_production \
+  -f /tmp/migrate_to_enhanced_schema.sql
+
+# 4. Verify migration
+docker exec -it btc-ml-timescaledb psql -U mltrader -d btc_ml_production \
+  -c "\d market_analysis"
+
+# 5. Update Go structs in main.go (see migration guide)
+
+# 6. Rebuild and restart
+docker-compose build data-api
+docker-compose restart data-api
+```
+
+**Files Needed:**
+- `migrations/migrate_to_enhanced_schema.sql` - Main migration script
+- `migrations/MIGRATION_GUIDE.md` - Detailed instructions with code examples
+- `migrations/LOG_TO_DATABASE_MAPPING.md` - Complete field mapping reference
+
+### Go Struct Updates for v2.0
+
+After applying the database migration, update `main.go` structs:
+
+```go
+type MarketAnalysis struct {
+    // ... existing fields ...
+    
+    // NEW in v2.0
+    SignalFactors        json.RawMessage `json:"signal_factors,omitempty"`
+    PivotR3Traditional   *float64        `json:"pivot_r3_traditional,string,omitempty"`
+    PivotR2Traditional   *float64        `json:"pivot_r2_traditional,string,omitempty"`
+    // ... (add all pivot fields)
+    PivotConfluenceZones json.RawMessage `json:"pivot_confluence_zones,omitempty"`
+    SMCOrderBlocks       json.RawMessage `json:"smc_order_blocks,omitempty"`
+    SMCFVGs              json.RawMessage `json:"smc_fvgs,omitempty"`
+    SMCBreaks            json.RawMessage `json:"smc_breaks,omitempty"`
+    SMCLiquidity         json.RawMessage `json:"smc_liquidity,omitempty"`
+    SupportLevels        json.RawMessage `json:"support_levels,omitempty"`
+    ResistanceLevels     json.RawMessage `json:"resistance_levels,omitempty"`
+    Momentum             json.RawMessage `json:"momentum,omitempty"`
+    StructurePattern     *string         `json:"structure_pattern,omitempty"`
+    StructureLastHigh    *float64        `json:"structure_last_high,string,omitempty"`
+    StructureLastLow     *float64        `json:"structure_last_low,string,omitempty"`
+    Warnings             json.RawMessage `json:"warnings,omitempty"`
+    ActionRecommendation *string         `json:"action_recommendation,omitempty"`
+}
+
+type MarketSignal struct {
+    // ... existing fields ...
+    
+    // CHANGED in v2.0: TEXT[] -> JSONB
+    KeyReasons           json.RawMessage `json:"key_reasons,omitempty"`
+}
+```
+
+Update the SELECT query to include all new columns. See `migrations/MIGRATION_GUIDE.md` for complete code.
+
+### What You Get After Migration
+
+The API will return **exactly the same data as the market-analyzer logs**:
+
+**Before (v1.0):** ~30% of log data
+```json
+{
+  "signal_type": "WEAK_BUY",
+  "trends": {"1h": {"direction": "UPTREND"}},
+  "nearest_support": "87556.00"
+}
+```
+
+**After (v2.0):** 100% of log data
+```json
+{
+  "signal_type": "WEAK_BUY",
+  "signal_factors": [{"description": "...", "weight": -30}],
+  "trends": {"5m": {...}, "15m": {...}, "1h": {...}, "4h": {...}, "1d": {...}},
+  "pivot_r3_traditional": "94180.00",
+  "pivot_confluence_zones": [...],
+  "smc_order_blocks": [...],
+  "smc_fvgs": [...],
+  "support_levels": [{"price": 87556, "strength": 0.62, "touches": 11}],
+  "resistance_levels": [...],
+  "momentum": {"5m": {...}, "1h": {...}, "4h": {...}},
+  "structure_pattern": "CONTRACTING",
+  "warnings": [...]
+}
+```
 
 ---
 
