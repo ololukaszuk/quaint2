@@ -234,21 +234,6 @@ class MambaModel(nn.Module):
         output = self.output_proj(h)
         
         return output
-    
-    @torch.jit.export
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Prediction method for inference (TorchScript compatible).
-        
-        Args:
-            x: Input tensor (batch, seq_len, input_size)
-            
-        Returns:
-            Predictions (batch, output_size)
-        """
-        self.eval()
-        with torch.no_grad():
-            return self.forward(x)
 
 
 def create_mamba_model(config: Optional[MambaConfig] = None) -> MambaModel:
@@ -293,7 +278,7 @@ def load_mamba_model(path: str, config: Optional[MambaConfig] = None) -> MambaMo
 
 def export_mamba_torchscript(model: MambaModel, output_path: str) -> None:
     """
-    Export Mamba model to TorchScript format.
+    Export Mamba model to TorchScript format using tracing.
     
     Args:
         model: Trained MambaModel
@@ -301,20 +286,21 @@ def export_mamba_torchscript(model: MambaModel, output_path: str) -> None:
     """
     model.eval()
     
-    # Create example input
+    # Create example input for tracing
     example_input = torch.randn(1, SEQUENCE_LENGTH, NUM_FEATURES)
     
-    # Script the model
-    scripted = torch.jit.script(model)
+    # Use trace instead of script to avoid Self type annotation issues
+    with torch.no_grad():
+        traced = torch.jit.trace(model, example_input)
     
     # Verify output
     with torch.no_grad():
         original_output = model(example_input)
-        scripted_output = scripted(example_input)
+        traced_output = traced(example_input)
     
-    assert torch.allclose(original_output, scripted_output, atol=1e-5), \
-        "TorchScript output doesn't match original"
+    if not torch.allclose(original_output, traced_output, atol=1e-5):
+        raise RuntimeError("TorchScript traced output doesn't match original")
     
     # Save
-    scripted.save(output_path)
+    traced.save(output_path)
     print(f"Exported TorchScript model to {output_path}")
