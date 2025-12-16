@@ -44,7 +44,7 @@ class MarketAnalyzerService:
         # Track previous signal for change detection
         self.previous_signal_type: Optional[str] = None
         self.previous_signal_direction: Optional[str] = None
-        
+      
     async def start(self):
         """Initialize and start the service."""
         logger.info("=" * 60)
@@ -135,13 +135,29 @@ class MarketAnalyzerService:
                 # Log full report
                 self.log_market_context(context, signal_changed)
                 
-                # Save to database
-                await self.save_analysis(context, signal_changed)
+                # We need to pass the previous values to save_analysis
+                previous_type_for_save = self.previous_signal_type
+                previous_dir_for_save = self.previous_signal_direction
                 
-                # Update previous signal tracking
+                # This ensures next iteration has correct previous values
                 if context.signal:
-                    self.previous_signal_type = context.signal.signal_type.value
-                    self.previous_signal_direction = context.signal.direction
+                    current_type = context.signal.signal_type.value
+                    current_direction = context.signal.direction
+                    
+                    # Log the transition for debugging
+                    if signal_changed:
+                        logger.debug(f"Signal transition: {previous_type_for_save} ({previous_dir_for_save}) → {current_type} ({current_direction})")
+                    
+                    # Update tracking variables for next iteration
+                    self.previous_signal_type = current_type
+                    self.previous_signal_direction = current_direction
+                
+                await self.save_analysis(
+                    context, 
+                    signal_changed,
+                    previous_type_for_save,
+                    previous_dir_for_save
+                )
                     
         except Exception as e:
             logger.error(f"Analysis error: {e}")
@@ -163,7 +179,13 @@ class MarketAnalyzerService:
         return (current_type != self.previous_signal_type or 
                 current_direction != self.previous_signal_direction)
     
-    async def save_analysis(self, ctx: MarketContext, signal_changed: bool):
+    async def save_analysis(
+        self, 
+        ctx: MarketContext, 
+        signal_changed: bool,
+        previous_type: Optional[str] = None,
+        previous_direction: Optional[str] = None
+    ):
         """Save analysis to database."""
         if not self.db or not self.db.pool:
             return
@@ -237,7 +259,7 @@ class MarketAnalyzerService:
                     vol_1h,
                     summary,
                     signal_changed,
-                    self.previous_signal_type
+                    previous_type  # ✅ Use passed parameter instead of self.previous_signal_type
                 )
                 
                 # If signal changed, also insert into market_signals
@@ -264,12 +286,12 @@ class MarketAnalyzerService:
                         signal.setup.take_profit_2 if signal.setup else None,
                         signal.setup.take_profit_3 if signal.setup else None,
                         signal.setup.risk_reward_ratio if signal.setup else None,
-                        self.previous_signal_type,
-                        self.previous_signal_direction,
+                        previous_type,       # ✅ Use passed parameter
+                        previous_direction,  # ✅ Use passed parameter
                         summary,
                         reasons_array
                     )
-                    logger.info(f"💾 Signal change saved to database")
+                    logger.info(f"💾 Signal change saved: {previous_type or 'None'} → {signal.signal_type.value}")
                     
         except Exception as e:
             logger.debug(f"Could not save analysis to database: {e}")

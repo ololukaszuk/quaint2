@@ -1,0 +1,725 @@
+# Data API Service
+
+Secure REST API for accessing BTC trading data from TimescaleDB with HTTPS support (self-signed or custom certificates).
+
+## Features
+
+- ✅ **HTTPS by default** with self-signed certificates
+- ✅ **Custom certificate support** via mounted volumes
+- ✅ **5 REST endpoints** for different data types
+- ✅ **Query parameters** for filtering and pagination
+- ✅ **CORS enabled** for web applications
+- ✅ **Health checks** for monitoring
+- ✅ **JSON responses** with proper error handling
+
+## Quick Start
+
+### 1. Environment Variables
+
+Required in `.env`:
+```bash
+# Database connection
+DATABASE_URL=postgresql://mltrader:your_password@timescaledb:5432/btc_ml_production
+
+# Optional - TLS configuration
+USE_TLS=true              # Set to "false" to disable HTTPS
+PORT=8443                 # Default: 8443 (HTTPS) or 8080 (HTTP)
+TLS_CERT_FILE=/certs/custom.crt  # Optional: custom certificate
+TLS_KEY_FILE=/certs/custom.key   # Optional: custom key
+```
+
+### 2. Start Service
+
+**With Docker Compose:**
+```bash
+docker-compose up data-api
+```
+
+**Standalone:**
+```bash
+docker build -t data-api ./data-api
+docker run -p 8443:8443 --env-file .env data-api
+```
+
+### 3. Test Connection
+
+**With self-signed cert (ignore SSL warning):**
+```bash
+curl -k https://localhost:8443/api/v1/health
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "status": "healthy",
+    "service": "data-api",
+    "time": "2025-12-16T20:15:00Z"
+  }
+}
+```
+
+## API Endpoints
+
+All endpoints return JSON in this format:
+```json
+{
+  "success": true,
+  "data": [...],
+  "count": 100,
+  "error": "error message if failed"
+}
+```
+
+### 1. Health Check
+
+**GET** `/api/v1/health`
+
+Check service and database connectivity.
+
+**Example:**
+```bash
+curl -k https://localhost:8443/api/v1/health
+```
+
+---
+
+### 2. Candles (OHLCV Data)
+
+**GET** `/api/v1/candles`
+
+Get 1-minute candle data.
+
+**Query Parameters:**
+- `limit` (int, default: 100, max: 10000) - Number of records
+- `start_time` (ISO 8601) - Filter by start time
+- `end_time` (ISO 8601) - Filter by end time
+
+**Example:**
+```bash
+# Get latest 100 candles
+curl -k "https://localhost:8443/api/v1/candles?limit=100"
+
+# Get candles in time range
+curl -k "https://localhost:8443/api/v1/candles?start_time=2025-12-16T19:00:00Z&end_time=2025-12-16T20:00:00Z"
+```
+
+**Response Fields:**
+```json
+{
+  "time": "2025-12-16T20:09:00Z",
+  "open": "87593.00000000",
+  "high": "87687.18000000",
+  "low": "87593.00000000",
+  "close": "87639.81000000",
+  "volume": "6.79507000",
+  "quote_asset_volume": "595495.76825340",
+  "taker_buy_base_asset_volume": "5.70270000",
+  "taker_buy_quote_asset_volume": "499746.56648440",
+  "number_of_trades": 3718,
+  "spread_bps": "10.7463",
+  "taker_buy_ratio": "0.8392",
+  "mid_price": "87640.09000000"
+}
+```
+
+---
+
+### 3. Data Quality Logs
+
+**GET** `/api/v1/data-quality-logs`
+
+Get data quality events (gaps, errors, cleanups).
+
+**Query Parameters:**
+- `limit` (int, default: 100, max: 1000)
+- `event_type` (string) - Filter by type: `gap_detected`, `error`, `cleanup`
+- `resolved` (boolean) - Filter by resolution status: `true`, `false`
+
+**Example:**
+```bash
+# Get all unresolved gaps
+curl -k "https://localhost:8443/api/v1/data-quality-logs?event_type=gap_detected&resolved=false"
+
+# Get recent cleanup logs
+curl -k "https://localhost:8443/api/v1/data-quality-logs?event_type=cleanup&limit=10"
+```
+
+**Response Fields:**
+```json
+{
+  "id": 58,
+  "event_type": "gap_detected",
+  "gap_start": "2025-12-16T14:33:00Z",
+  "gap_end": "2025-12-16T14:34:00Z",
+  "candles_missing": 1,
+  "candles_recovered": null,
+  "source": "system",
+  "error_message": null,
+  "resolved": false,
+  "resolved_at": null,
+  "created_at": "2025-12-16T14:35:00.283671Z"
+}
+```
+
+---
+
+### 4. LLM Analysis
+
+**GET** `/api/v1/llm-analysis`
+
+Get AI predictions and analysis from DeepSeek/Ollama.
+
+**Query Parameters:**
+- `limit` (int, default: 50, max: 1000)
+
+**Example:**
+```bash
+curl -k "https://localhost:8443/api/v1/llm-analysis?limit=20"
+```
+
+**Response Fields:**
+```json
+{
+  "id": 24,
+  "analysis_time": "2025-12-16T20:08:21.938424Z",
+  "price": "87584.01000000",
+  "prediction_direction": "BULLISH",
+  "prediction_confidence": "LOW",
+  "predicted_price_1h": null,
+  "predicted_price_4h": null,
+  "key_levels": "S: $87,417 | R: $87,553",
+  "reasoning": "The analysis indicates weak bullish sentiment...",
+  "full_response": "**BTCUSDT Price Prediction Analysis**...",
+  "model_name": "deepseek-r1:32b",
+  "response_time_seconds": 14.25,
+  "actual_price_1h": null,
+  "actual_price_4h": null,
+  "direction_correct_1h": null,
+  "direction_correct_4h": null,
+  "created_at": "2025-12-16T20:08:21.939582Z"
+}
+```
+
+---
+
+### 5. Market Analysis
+
+**GET** `/api/v1/market-analysis`
+
+Get technical analysis from market-analyzer service.
+
+**Query Parameters:**
+- `limit` (int, default: 50, max: 1000)
+- `signal_type` (string) - Filter by signal: `STRONG_BUY`, `BUY`, `WEAK_BUY`, `NEUTRAL`, `WEAK_SELL`, `SELL`, `STRONG_SELL`
+
+**Example:**
+```bash
+# Get latest analysis
+curl -k "https://localhost:8443/api/v1/market-analysis?limit=10"
+
+# Get only strong buy signals
+curl -k "https://localhost:8443/api/v1/market-analysis?signal_type=STRONG_BUY"
+```
+
+**Response Fields:**
+```json
+{
+  "id": 136,
+  "analysis_time": "2025-12-16T20:12:00Z",
+  "price": "87445.95000000",
+  "signal_type": "WEAK_BUY",
+  "signal_direction": "LONG",
+  "signal_confidence": 44.23,
+  "entry_price": null,
+  "stop_loss": null,
+  "take_profit_1": null,
+  "take_profit_2": null,
+  "take_profit_3": null,
+  "risk_reward_ratio": null,
+  "trends": {"1d": {"strength": 0.4, "direction": "UPTREND"}, ...},
+  "nearest_support": "87338.97000000",
+  "nearest_resistance": "87553.05888889",
+  "support_strength": 0.72,
+  "resistance_strength": 0.54,
+  "smc_bias": "BULLISH",
+  "price_zone": "DISCOUNT",
+  "equilibrium_price": "87599.64000000",
+  "daily_pivot": "87210.45333333",
+  "price_vs_pivot": "ABOVE",
+  "rsi_1h": 52.76,
+  "volume_ratio_1h": 0.12,
+  "summary": "BTC $87,446 - WEAK_BUY (44% confidence)...",
+  "signal_changed": false,
+  "previous_signal": "WEAK_BUY",
+  "created_at": "2025-12-16T20:13:06.838209Z"
+}
+```
+
+---
+
+### 6. Market Signals
+
+**GET** `/api/v1/market-signals`
+
+Get signal change events only (when signals shift).
+
+**Query Parameters:**
+- `limit` (int, default: 100, max: 1000)
+
+**Example:**
+```bash
+curl -k "https://localhost:8443/api/v1/market-signals?limit=50"
+```
+
+**Response Fields:**
+```json
+{
+  "id": 5,
+  "signal_time": "2025-12-16T20:11:00Z",
+  "signal_type": "WEAK_BUY",
+  "signal_direction": "LONG",
+  "signal_confidence": 40.92,
+  "price": "87560.02000000",
+  "entry_price": null,
+  "stop_loss": null,
+  "take_profit_1": null,
+  "take_profit_2": null,
+  "take_profit_3": null,
+  "risk_reward_ratio": null,
+  "previous_signal_type": "NEUTRAL",
+  "previous_direction": "NONE",
+  "summary": "BTC $87,560 - WEAK_BUY (41% confidence)...",
+  "key_reasons": [
+    "At strong resistance $87,753 (0.22% away)",
+    "Bullish CHoCH - potential trend reversal up",
+    "4h trend: DOWNTREND (100% strength), EMA: BEARISH"
+  ],
+  "created_at": "2025-12-16T20:12:06.649739Z"
+}
+```
+
+---
+
+## TLS/HTTPS Configuration
+
+### Self-Signed Certificate (Default)
+
+The service generates a self-signed certificate automatically on startup. Use `-k` flag with curl to ignore SSL warnings:
+
+```bash
+curl -k https://localhost:8443/api/v1/health
+```
+
+**Browser Warning:**
+Browsers will show a security warning. Click "Advanced" → "Proceed to localhost".
+
+---
+
+### Custom Certificate (Production)
+
+**1. Place your certificate files:**
+```
+project_root/
+├── certs/
+│   ├── server.crt  # Your SSL certificate
+│   └── server.key  # Your private key
+```
+
+**2. Update `.env`:**
+```bash
+TLS_CERT_FILE=/certs/server.crt
+TLS_KEY_FILE=/certs/server.key
+```
+
+**3. Update `docker-compose.yml`:**
+```yaml
+data-api:
+  volumes:
+    - ./certs:/certs:ro  # Mount certificate directory
+```
+
+**4. Restart service:**
+```bash
+docker-compose restart data-api
+```
+
+---
+
+### Disable HTTPS (Development Only)
+
+**Update `.env`:**
+```bash
+USE_TLS=false
+PORT=8080
+```
+
+**Access via HTTP:**
+```bash
+curl http://localhost:8080/api/v1/health
+```
+
+---
+
+## Integration Examples
+
+### Python
+
+```python
+import requests
+from urllib3.exceptions import InsecureRequestWarning
+
+# Disable SSL warnings for self-signed cert
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+# Get latest candles
+response = requests.get(
+    'https://localhost:8443/api/v1/candles',
+    params={'limit': 100},
+    verify=False  # Skip SSL verification for self-signed
+)
+
+if response.status_code == 200:
+    data = response.json()
+    if data['success']:
+        candles = data['data']
+        print(f"Got {data['count']} candles")
+```
+
+### JavaScript/Node.js
+
+```javascript
+const https = require('https');
+const axios = require('axios');
+
+// Create agent that accepts self-signed certificates
+const agent = new https.Agent({
+  rejectUnauthorized: false
+});
+
+// Get market analysis
+axios.get('https://localhost:8443/api/v1/market-analysis', {
+  params: { limit: 10 },
+  httpsAgent: agent
+})
+.then(response => {
+  console.log(`Got ${response.data.count} analyses`);
+  console.log(response.data.data[0]);
+})
+.catch(error => {
+  console.error('Error:', error.message);
+});
+```
+
+### Go
+
+```go
+package main
+
+import (
+    "crypto/tls"
+    "encoding/json"
+    "fmt"
+    "net/http"
+)
+
+func main() {
+    // Create client that accepts self-signed certificates
+    tr := &http.Transport{
+        TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+    }
+    client := &http.Client{Transport: tr}
+
+    resp, err := client.Get("https://localhost:8443/api/v1/candles?limit=10")
+    if err != nil {
+        panic(err)
+    }
+    defer resp.Body.Close()
+
+    var result map[string]interface{}
+    json.NewDecoder(resp.Body).Decode(&result)
+    
+    fmt.Printf("Success: %v, Count: %.0f\n", 
+        result["success"], result["count"])
+}
+```
+
+---
+
+## Monitoring
+
+### Health Check Endpoint
+
+```bash
+# Check if service is healthy
+curl -k https://localhost:8443/api/v1/health
+```
+
+**Healthy Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "status": "healthy",
+    "service": "data-api",
+    "time": "2025-12-16T20:15:00Z"
+  }
+}
+```
+
+**Unhealthy Response (503):**
+```json
+{
+  "success": false,
+  "error": "Database unavailable"
+}
+```
+
+### Docker Health Check
+
+Docker Compose automatically monitors health:
+```bash
+docker-compose ps data-api
+```
+
+**Output:**
+```
+NAME          STATUS
+data-api      Up 5 minutes (healthy)
+```
+
+### Logs
+
+```bash
+# View real-time logs
+docker-compose logs -f data-api
+
+# Last 100 lines
+docker-compose logs --tail=100 data-api
+```
+
+---
+
+## Troubleshooting
+
+### Issue: "connection refused"
+
+**Cause:** Service not started or wrong port
+
+**Solution:**
+```bash
+# Check service status
+docker-compose ps data-api
+
+# Check logs
+docker-compose logs data-api
+
+# Verify port in .env
+grep PORT .env
+```
+
+---
+
+### Issue: "SSL certificate problem"
+
+**Cause:** Self-signed certificate not trusted
+
+**Solution:**
+
+**For curl:**
+```bash
+curl -k https://localhost:8443/api/v1/health
+```
+
+**For Python:**
+```python
+requests.get(url, verify=False)
+```
+
+**For production:** Use a proper certificate from Let's Encrypt or your CA.
+
+---
+
+### Issue: "Database unavailable"
+
+**Cause:** TimescaleDB not running or wrong credentials
+
+**Solution:**
+```bash
+# Check database
+docker-compose ps timescaledb
+
+# Test connection
+docker-compose exec timescaledb psql -U mltrader -d btc_ml_production -c "SELECT 1;"
+
+# Verify DATABASE_URL in .env
+grep DATABASE_URL .env
+```
+
+---
+
+### Issue: "Query error: permission denied"
+
+**Cause:** Database user lacks permissions
+
+**Solution:**
+```sql
+-- Grant read permissions
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO mltrader;
+```
+
+---
+
+## Performance
+
+### Response Times
+
+- Health check: ~5ms
+- Candles (100 records): ~20ms
+- Market analysis (50 records): ~30ms
+- LLM analysis (50 records): ~40ms
+
+### Limits
+
+- Max candles per request: 10,000
+- Max logs/analysis per request: 1,000
+- Concurrent connections: 100
+- Request timeout: 15 seconds
+
+### Optimization Tips
+
+1. **Use pagination** - Request smaller chunks with `limit` parameter
+2. **Filter by time** - Use `start_time`/`end_time` for candles
+3. **Filter by type** - Use `signal_type` or `event_type` filters
+4. **Cache responses** - Results don't change after insertion
+
+---
+
+## Security Considerations
+
+### Production Deployment
+
+1. **Use proper SSL certificate**
+   - Get certificate from Let's Encrypt or your CA
+   - Do NOT use self-signed certificates in production
+
+2. **Enable authentication** (not included, add as needed)
+   - API keys
+   - JWT tokens
+   - OAuth2
+
+3. **Rate limiting** (not included, add with nginx/traefik)
+   - Limit requests per IP
+   - Prevent abuse
+
+4. **Network isolation**
+   - Keep database on private network
+   - Expose only data-api to public
+   - Use firewall rules
+
+5. **Read-only database user**
+   - Grant only SELECT permissions
+   - Prevent accidental modifications
+
+---
+
+## Known Issues
+
+### 1. Market signals missing trade setup
+
+**Symptom:** `entry_price`, `stop_loss`, `take_profit_*` are NULL
+
+**Cause:** Signal confidence < 60% doesn't generate setup (see issue in market-analyzer)
+
+**Workaround:** Apply the fix in `market-analyzer_signals_fix.py`
+
+---
+
+### 2. Data quality logs show "error" for cleanups
+
+**Symptom:** Cleanup logs have `event_type='error'`
+
+**Cause:** Logging function uses wrong event_type
+
+**Workaround:** Apply the fix in `timescaledb_cleanup_fix.sql`
+
+---
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | *(required)* | PostgreSQL connection string |
+| `USE_TLS` | `true` | Enable HTTPS (`true`/`false`) |
+| `PORT` | `8443` (TLS) or `8080` | Server port |
+| `TLS_CERT_FILE` | `/certs/server.crt` | Path to SSL certificate |
+| `TLS_KEY_FILE` | `/certs/server.key` | Path to SSL private key |
+
+---
+
+## API Response Format
+
+### Success Response
+```json
+{
+  "success": true,
+  "data": [...],
+  "count": 100
+}
+```
+
+### Error Response
+```json
+{
+  "success": false,
+  "error": "Error description"
+}
+```
+
+### HTTP Status Codes
+
+- `200 OK` - Success
+- `400 Bad Request` - Invalid parameters
+- `500 Internal Server Error` - Server/database error
+- `503 Service Unavailable` - Database connection failed
+
+---
+
+## Development
+
+### Build Locally
+
+```bash
+cd data-api
+go mod download
+go build -o data-api main.go
+./data-api
+```
+
+### Run Tests
+
+```bash
+# Test health endpoint
+curl -k https://localhost:8443/api/v1/health
+
+# Test each endpoint
+curl -k "https://localhost:8443/api/v1/candles?limit=1"
+curl -k "https://localhost:8443/api/v1/data-quality-logs?limit=1"
+curl -k "https://localhost:8443/api/v1/llm-analysis?limit=1"
+curl -k "https://localhost:8443/api/v1/market-analysis?limit=1"
+curl -k "https://localhost:8443/api/v1/market-signals?limit=1"
+```
+
+### Add New Endpoints
+
+1. Define response struct in `main.go`
+2. Add handler function
+3. Register route in `main()`
+4. Update this README
+
+---
+
+## License
+
+Part of the quaint2 BTC ML trading system.

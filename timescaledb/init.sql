@@ -562,7 +562,7 @@ DECLARE
     log_cutoff TIMESTAMPTZ;
 BEGIN
     -- Calculate cutoff dates
-    candle_cutoff := NOW() - INTERVAL '13 months';
+    candle_cutoff := NOW() - INTERVAL '12 months';
     prediction_cutoff := NOW() - INTERVAL '3 months';
     feature_cutoff := NOW() - INTERVAL '1 month';
     log_cutoff := NOW() - INTERVAL '6 months';  -- Keep logs longer for audit
@@ -611,10 +611,20 @@ CREATE OR REPLACE FUNCTION run_scheduled_cleanup()
 RETURNS VOID AS $$
 DECLARE
     result RECORD;
+    cleanup_message TEXT;
 BEGIN
     SELECT * INTO result FROM cleanup_old_data();
     
-    -- Log the cleanup results
+    -- Build proper message
+    cleanup_message := format(
+        'Scheduled cleanup completed: candles=%s, predictions=%s, features=%s, logs=%s',
+        COALESCE(result.candles_deleted::TEXT, '0'),
+        COALESCE(result.predictions_deleted::TEXT, '0'),
+        COALESCE(result.feature_cache_deleted::TEXT, '0'),
+        COALESCE(result.logs_deleted::TEXT, '0')
+    );
+    
+    -- Log with proper event_type
     INSERT INTO data_quality_logs (
         event_type,
         source,
@@ -622,14 +632,14 @@ BEGIN
         resolved,
         resolved_at
     ) VALUES (
-        'error',  -- Using 'error' type for system logs
+        'cleanup',  -- Changed from 'error'
         'system',
-        FORMAT('Scheduled cleanup completed: candles=%s, predictions=%s, features=%s, logs=%s',
-               result.candles_deleted, result.predictions_deleted,
-               result.feature_cache_deleted, result.logs_deleted),
+        cleanup_message,
         TRUE,
         NOW()
     );
+    
+    RAISE NOTICE '%', cleanup_message;
 END;
 $$ LANGUAGE plpgsql;
 

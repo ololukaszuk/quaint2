@@ -312,6 +312,43 @@ services:
         max-size: "100m"
         max-file: "10"
 
+  # ============================================================================
+  # Data API - Secure REST API for accessing trading data (HTTPS)
+  # ============================================================================
+  data-api:
+    build:
+      context: ./data-api
+      dockerfile: Dockerfile
+    container_name: btc-ml-data-api
+    environment:
+      - DATABASE_URL=postgresql://mltrader:${DB_PASSWORD}@timescaledb:5432/btc_ml_production
+      - USE_TLS=${DATA_API_USE_TLS:-true}
+      - PORT=${DATA_API_PORT:-8443}
+      - TLS_CERT_FILE=${DATA_API_TLS_CERT_FILE:-/certs/server.crt}
+      - TLS_KEY_FILE=${DATA_API_TLS_KEY_FILE:-/certs/server.key}
+    ports:
+      - "${DATA_API_PORT:-8443}:${DATA_API_PORT:-8443}"
+    volumes:
+      # Optional: mount custom certificates (uncomment for production)
+      # - ./certs:/certs:ro
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:${DATA_API_PORT:-8443}/api/v1/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - btc-ml-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
 
 volumes:
   timescaledb_data:
