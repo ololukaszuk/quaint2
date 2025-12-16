@@ -3,10 +3,12 @@ Data models for Market Analyzer.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 import numpy as np
+import logging
 
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Candle:
@@ -24,14 +26,15 @@ class Candle:
     spread_bps: float = 0.0
     taker_buy_ratio: float = 0.5
 
-
 @dataclass
 class CandleArray:
     """
     Efficient storage for candle data as numpy arrays.
     Used for fast indicator calculations.
+    
+    All timestamps are stored as UTC-aware datetime64[s].
     """
-    time: np.ndarray  # datetime64
+    time: np.ndarray  # datetime64[s] in UTC
     open: np.ndarray
     high: np.ndarray
     low: np.ndarray
@@ -39,16 +42,59 @@ class CandleArray:
     volume: np.ndarray
     spread_bps: np.ndarray
     taker_buy_ratio: np.ndarray
-    
+
     def __len__(self) -> int:
         return len(self.close)
-    
+
+    @staticmethod
+    def _ensure_utc(dt: datetime) -> datetime:
+        """
+        Ensure a datetime object is UTC-aware.
+        
+        - If naive: assumes UTC and adds timezone info
+        - If already UTC: returns as-is
+        - If different timezone: converts to UTC
+        
+        Args:
+            dt: datetime object (naive or aware)
+            
+        Returns:
+            UTC-aware datetime object
+        """
+        if dt.tzinfo is None:
+            # Naive datetime - assume it's UTC
+            logger.debug(f"Converting naive datetime {dt} to UTC-aware")
+            return dt.replace(tzinfo=timezone.utc)
+        elif dt.tzinfo == timezone.utc or dt.tzinfo.tzname(dt) == "UTC":
+            # Already UTC
+            return dt
+        else:
+            # Different timezone - convert to UTC
+            logger.debug(f"Converting {dt.tzinfo.tzname(dt)} datetime to UTC")
+            return dt.astimezone(timezone.utc)
+
     @classmethod
     def from_candles(cls, candles: List[Candle]) -> "CandleArray":
-        """Create CandleArray from list of Candle objects."""
-        n = len(candles)
+        """
+        Create CandleArray from list of Candle objects.
+        
+        Ensures all timestamps are UTC-aware before conversion to numpy datetime64.
+        This prevents NumPy timezone warnings and ensures data consistency.
+        
+        Args:
+            candles: List of Candle objects
+            
+        Returns:
+            CandleArray with UTC-aware timestamps
+        """
+        if not candles:
+            raise ValueError("Cannot create CandleArray from empty candle list")
+        
+        # Ensure all times are UTC-aware
+        utc_times = [cls._ensure_utc(c.time) for c in candles]
+        
         return cls(
-            time=np.array([c.time for c in candles], dtype='datetime64[s]'),
+            time=np.array(utc_times, dtype='datetime64[s]'),
             open=np.array([c.open for c in candles], dtype=np.float64),
             high=np.array([c.high for c in candles], dtype=np.float64),
             low=np.array([c.low for c in candles], dtype=np.float64),
