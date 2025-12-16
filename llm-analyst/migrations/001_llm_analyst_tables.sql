@@ -181,11 +181,18 @@ $$ LANGUAGE plpgsql;
 -- Schedule accuracy updates (runs hourly)
 -- ============================================================================
 
-SELECT add_job(
-    'update_llm_accuracy',
-    '1 hour',
-    if_not_exists => TRUE
-);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM timescaledb_information.jobs 
+        WHERE proc_name = 'update_llm_accuracy'
+    ) THEN
+        PERFORM add_job(
+            'update_llm_accuracy'::REGPROC,
+            INTERVAL '1 hour'
+        );
+    END IF;
+END $$;
 
 -- ============================================================================
 -- Done
