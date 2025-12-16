@@ -289,22 +289,22 @@ class MarketAnalyzerService:
                 
                 # === 5. SUPPORT/RESISTANCE (all levels) ===
                 support_levels = []
-                for level in ctx.support_levels[:3]:  # Top 3
+                for level in ctx.support_levels[:3]:
                     support_levels.append({
                         "price": float(level.price),
                         "strength": level.strength,
                         "touches": level.touches,
-                        "timeframes": level.timeframes,
+                        "timeframe": level.source_timeframe,  # ✅ Use source_timeframe
                         "distance_pct": abs((level.price - ctx.current_price) / ctx.current_price * 100)
                     })
-                
+
                 resistance_levels = []
-                for level in ctx.resistance_levels[:3]:  # Top 3
+                for level in ctx.resistance_levels[:3]:
                     resistance_levels.append({
                         "price": float(level.price),
                         "strength": level.strength,
                         "touches": level.touches,
-                        "timeframes": level.timeframes,
+                        "timeframe": level.source_timeframe,  # ✅ Use source_timeframe
                         "distance_pct": abs((level.price - ctx.current_price) / ctx.current_price * 100)
                     })
                 
