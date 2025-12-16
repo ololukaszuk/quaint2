@@ -324,11 +324,11 @@ services:
       - DATABASE_URL=postgresql://mltrader:${DB_PASSWORD}@timescaledb:5432/btc_ml_production
       - API_KEY=${DATA_API_KEY}
       - USE_TLS=${DATA_API_USE_TLS:-true}
-      - PORT=${DATA_API_PORT:-8443}
+      - PORT=8443
       - TLS_CERT_FILE=${DATA_API_TLS_CERT_FILE:-/certs/server.crt}
       - TLS_KEY_FILE=${DATA_API_TLS_KEY_FILE:-/certs/server.key}
     ports:
-      - "${DATA_API_PORT:-8443}:${DATA_API_PORT:-8443}"
+      - "${DATA_API_PORT:-8443}:8443"
     #volumes:
       # Optional: mount custom certificates (uncomment for production)
       # - ./certs:/certs:ro
