@@ -204,110 +204,172 @@ class MarketAnalyzerService:
         
         try:
             async with self.db.pool.acquire() as conn:
-                # Check if tables exist
-                table_exists = await conn.fetchval(
-                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'market_analysis')"
-                )
-                
-                if not table_exists:
-                    logger.debug("market_analysis table doesn't exist yet - skipping save")
-                    return
-                
-                # Prepare data
                 signal = ctx.signal
-                trends_json = json.dumps({
-                    tf: {"direction": t.direction, "strength": t.strength}
-                    for tf, t in ctx.trends.items()
-                })
                 
-                nearest_support = ctx.support_levels[0].price if ctx.support_levels else None
-                support_strength = ctx.support_levels[0].strength if ctx.support_levels else None
-                nearest_resistance = ctx.resistance_levels[0].price if ctx.resistance_levels else None
-                resistance_strength = ctx.resistance_levels[0].strength if ctx.resistance_levels else None
+                # === 1. SIGNAL FACTORS (with weights) ===
+                signal_factors = []
+                if signal and signal.factors:
+                    for factor in signal.factors[:10]:  # Top 10 factors
+                        signal_factors.append({
+                            "description": factor.description,
+                            "weight": factor.weight,
+                            "type": "bullish" if factor.weight > 0 else "bearish"
+                        })
                 
-                rsi_1h = ctx.momentum.get("1h", {})
-                rsi_1h_val = rsi_1h.rsi if hasattr(rsi_1h, 'rsi') else None
-                vol_1h = rsi_1h.volume_ratio if hasattr(rsi_1h, 'volume_ratio') else None
+                # === 2. TRENDS (enhanced with EMA and structure) ===
+                trends_json = {}
+                for tf, trend in ctx.trends.items():
+                    trends_json[tf] = {
+                        "direction": trend.direction,
+                        "strength": trend.strength,
+                        "ema": getattr(trend, 'ema_alignment', 'UNKNOWN'),
+                        "structure": getattr(trend, 'structure', '')
+                    }
                 
-                # Generate summary
-                summary = self.generate_summary(ctx)
+                # === 3. PIVOT POINTS (all methods) ===
+                pivots = ctx.pivots  # Assuming this is available in context
                 
-                # Insert into market_analysis
+                # === 4. SMC DATA (complete) ===
+                smc_order_blocks = []
+                if ctx.smc and ctx.smc.order_blocks:
+                    for ob in ctx.smc.order_blocks:
+                        smc_order_blocks.append({
+                            "type": "bullish" if ob.is_bullish else "bearish",
+                            "low": float(ob.low),
+                            "high": float(ob.high),
+                            "strength": ob.strength,
+                            "distance_pct": abs((ob.high - ctx.current_price) / ctx.current_price * 100)
+                        })
+                
+                smc_fvgs = []
+                if ctx.smc and ctx.smc.fvgs:
+                    for fvg in ctx.smc.fvgs:
+                        smc_fvgs.append({
+                            "type": "bullish" if fvg.is_bullish else "bearish",
+                            "low": float(fvg.low),
+                            "high": float(fvg.high),
+                            "unfilled": not fvg.filled
+                        })
+                
+                smc_breaks = []
+                if ctx.smc and ctx.smc.choch:
+                    smc_breaks.append({
+                        "type": "CHoCH",
+                        "direction": "BULLISH" if ctx.smc.choch.is_bullish else "BEARISH",
+                        "price": float(ctx.smc.choch.price)
+                    })
+                
+                smc_liquidity = {
+                    "buy_side": [float(p) for p in ctx.smc.buy_side_liquidity] if ctx.smc else [],
+                    "sell_side": [float(p) for p in ctx.smc.sell_side_liquidity] if ctx.smc else []
+                }
+                
+                # === 5. SUPPORT/RESISTANCE (all levels) ===
+                support_levels = []
+                for level in ctx.support_levels[:3]:  # Top 3
+                    support_levels.append({
+                        "price": float(level.price),
+                        "strength": level.strength,
+                        "touches": level.touches,
+                        "timeframes": level.timeframes,
+                        "distance_pct": abs((level.price - ctx.current_price) / ctx.current_price * 100)
+                    })
+                
+                resistance_levels = []
+                for level in ctx.resistance_levels[:3]:  # Top 3
+                    resistance_levels.append({
+                        "price": float(level.price),
+                        "strength": level.strength,
+                        "touches": level.touches,
+                        "timeframes": level.timeframes,
+                        "distance_pct": abs((level.price - ctx.current_price) / ctx.current_price * 100)
+                    })
+                
+                # === 6. MOMENTUM (all timeframes) ===
+                momentum = {}
+                for tf, mom in ctx.momentum.items():
+                    momentum[tf] = {
+                        "rsi": mom.rsi if hasattr(mom, 'rsi') else None,
+                        "volume_ratio": mom.volume_ratio if hasattr(mom, 'volume_ratio') else None,
+                        "taker_buy_ratio": mom.taker_buy_ratio if hasattr(mom, 'taker_buy_ratio') else None
+                    }
+                
+                # === 7. MARKET STRUCTURE ===
+                structure_pattern = getattr(ctx.structure, 'pattern', None)
+                structure_last_high = getattr(ctx.structure, 'last_high', None)
+                structure_last_low = getattr(ctx.structure, 'last_low', None)
+                
+                # === 8. WARNINGS ===
+                warnings = []
+                for warning in ctx.warnings:
+                    warnings.append({
+                        "type": warning.type,
+                        "message": warning.message,
+                        "severity": warning.severity
+                    })
+                
+                # === 9. ACTION RECOMMENDATION ===
+                action = "WAIT"  # Default
+                if signal and signal.confidence > 60:
+                    action = signal.direction
+                
+                # === INSERT QUERY ===
                 await conn.execute(
                     """
                     INSERT INTO market_analysis (
                         analysis_time, price, signal_type, signal_direction, signal_confidence,
                         entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3, risk_reward_ratio,
-                        trends, nearest_support, nearest_resistance, support_strength, resistance_strength,
-                        smc_bias, price_zone, equilibrium_price, daily_pivot, price_vs_pivot,
-                        rsi_1h, volume_ratio_1h, summary, signal_changed, previous_signal
+                        signal_factors, trends,
+                        pivot_daily, pivot_r3_traditional, pivot_r2_traditional, pivot_r1_traditional,
+                        pivot_s1_traditional, pivot_s2_traditional, pivot_s3_traditional,
+                        pivot_r3_fibonacci, pivot_r2_fibonacci, pivot_r1_fibonacci,
+                        pivot_s1_fibonacci, pivot_s2_fibonacci, pivot_s3_fibonacci,
+                        pivot_r4_camarilla, pivot_r3_camarilla, pivot_s3_camarilla, pivot_s4_camarilla,
+                        pivot_confluence_zones, price_vs_pivot,
+                        smc_bias, smc_price_zone, smc_equilibrium,
+                        smc_order_blocks, smc_fvgs, smc_breaks, smc_liquidity,
+                        support_levels, resistance_levels, momentum,
+                        structure_pattern, structure_last_high, structure_last_low,
+                        warnings, action_recommendation,
+                        summary, signal_changed, previous_signal
                     ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
+                        $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39,
+                        $40, $41, $42, $43, $44, $45, $46, $47
                     )
                     """,
-                    ctx.timestamp,
-                    to_python(ctx.current_price),
-                    signal.signal_type.value if signal else "NEUTRAL",
-                    signal.direction if signal else "NONE",
-                    to_python(signal.confidence if signal else 0),
-                    to_python(signal.setup.entry if signal and signal.setup else None),
-                    to_python(signal.setup.stop_loss if signal and signal.setup else None),
-                    to_python(signal.setup.take_profit_1 if signal and signal.setup else None),
-                    to_python(signal.setup.take_profit_2 if signal and signal.setup else None),
-                    to_python(signal.setup.take_profit_3 if signal and signal.setup else None),
-                    to_python(signal.setup.risk_reward_ratio if signal and signal.setup else None),
-                    trends_json,
-                    to_python(nearest_support),
-                    to_python(nearest_resistance),
-                    to_python(support_strength),
-                    to_python(resistance_strength),
-                    ctx.smc.current_bias if ctx.smc else None,
+                    ctx.timestamp, to_python(ctx.current_price),
+                    signal.signal_type.value, signal.direction, to_python(signal.confidence),
+                    to_python(signal.setup.entry if signal.setup else None),
+                    to_python(signal.setup.stop_loss if signal.setup else None),
+                    to_python(signal.setup.take_profit_1 if signal.setup else None),
+                    to_python(signal.setup.take_profit_2 if signal.setup else None),
+                    to_python(signal.setup.take_profit_3 if signal.setup else None),
+                    to_python(signal.setup.risk_reward_ratio if signal.setup else None),
+                    json.dumps(signal_factors), json.dumps(trends_json),
+                    to_python(pivots.pivot), to_python(pivots.r3_trad), to_python(pivots.r2_trad),
+                    to_python(pivots.r1_trad), to_python(pivots.s1_trad), to_python(pivots.s2_trad),
+                    to_python(pivots.s3_trad), to_python(pivots.r3_fib), to_python(pivots.r2_fib),
+                    to_python(pivots.r1_fib), to_python(pivots.s1_fib), to_python(pivots.s2_fib),
+                    to_python(pivots.s3_fib), to_python(pivots.r4_cam), to_python(pivots.r3_cam),
+                    to_python(pivots.s3_cam), to_python(pivots.s4_cam),
+                    json.dumps(pivots.confluence_zones), "ABOVE" if ctx.current_price > pivots.pivot else "BELOW",
+                    ctx.smc.bias if ctx.smc else None,
                     self.get_price_zone(ctx),
                     to_python(ctx.smc.equilibrium if ctx.smc else None),
-                    to_python(ctx.pivots.traditional.pivot if ctx.pivots else None),
-                    "ABOVE" if ctx.pivots and ctx.current_price > ctx.pivots.traditional.pivot else "BELOW",
-                    to_python(rsi_1h_val),
-                    to_python(vol_1h),
-                    summary,
-                    signal_changed,
-                    previous_type
+                    json.dumps(smc_order_blocks), json.dumps(smc_fvgs),
+                    json.dumps(smc_breaks), json.dumps(smc_liquidity),
+                    json.dumps(support_levels), json.dumps(resistance_levels),
+                    json.dumps(momentum),
+                    structure_pattern, to_python(structure_last_high), to_python(structure_last_low),
+                    json.dumps(warnings), action,
+                    self.generate_summary(ctx), signal_changed, previous_type
                 )
                 
-                # If signal changed, also insert into market_signals
-                if signal_changed and signal and signal.direction != "NONE":
-                    top_reasons = sorted(signal.reasons, key=lambda x: abs(x.weight), reverse=True)[:3]
-                    reasons_array = [r.description for r in top_reasons]
-                    
-                    await conn.execute(
-                        """
-                        INSERT INTO market_signals (
-                            signal_time, signal_type, signal_direction, signal_confidence,
-                            price, entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
-                            risk_reward_ratio, previous_signal_type, previous_direction, summary, key_reasons
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                        """,
-                        ctx.timestamp,
-                        signal.signal_type.value,
-                        signal.direction,
-                        to_python(signal.confidence),
-                        to_python(ctx.current_price),
-                        to_python(signal.setup.entry if signal.setup else None),
-                        to_python(signal.setup.stop_loss if signal.setup else None),
-                        to_python(signal.setup.take_profit_1 if signal.setup else None),
-                        to_python(signal.setup.take_profit_2 if signal.setup else None),
-                        to_python(signal.setup.take_profit_3 if signal.setup else None),
-                        to_python(signal.setup.risk_reward_ratio if signal.setup else None),
-                        previous_type,
-                        previous_direction,
-                        summary,
-                        reasons_array
-                    )
-                    logger.info(f"💾 Signal change saved: {previous_type or 'None'} → {signal.signal_type.value}")
-                    
         except Exception as e:
-            logger.debug(f"Could not save analysis to database: {e}")
-    
+            logger.error(f"Error saving analysis: {e}")
+        
     def get_price_zone(self, ctx: MarketContext) -> str:
         """Get current price zone from SMC analysis."""
         if not ctx.smc:

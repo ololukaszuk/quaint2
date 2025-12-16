@@ -84,54 +84,98 @@ type LLMAnalysis struct {
 }
 
 type MarketAnalysis struct {
-	ID                   int64           `json:"id"`
-	AnalysisTime         time.Time       `json:"analysis_time"`
-	Price                float64         `json:"price,string"`
-	SignalType           string          `json:"signal_type"`
-	SignalDirection      string          `json:"signal_direction"`
-	SignalConfidence     float64         `json:"signal_confidence"`
-	EntryPrice           *float64        `json:"entry_price,string,omitempty"`
-	StopLoss             *float64        `json:"stop_loss,string,omitempty"`
-	TakeProfit1          *float64        `json:"take_profit_1,string,omitempty"`
-	TakeProfit2          *float64        `json:"take_profit_2,string,omitempty"`
-	TakeProfit3          *float64        `json:"take_profit_3,string,omitempty"`
-	RiskRewardRatio      *float64        `json:"risk_reward_ratio,omitempty"`
-	Trends               json.RawMessage `json:"trends"`
-	NearestSupport       *float64        `json:"nearest_support,string,omitempty"`
-	NearestResistance    *float64        `json:"nearest_resistance,string,omitempty"`
-	SupportStrength      *float64        `json:"support_strength,omitempty"`
-	ResistanceStrength   *float64        `json:"resistance_strength,omitempty"`
-	SMCBias              *string         `json:"smc_bias,omitempty"`
-	PriceZone            *string         `json:"price_zone,omitempty"`
-	EquilibriumPrice     *float64        `json:"equilibrium_price,string,omitempty"`
-	DailyPivot           *float64        `json:"daily_pivot,string,omitempty"`
-	PriceVsPivot         *string         `json:"price_vs_pivot,omitempty"`
-	RSI1h                *float64        `json:"rsi_1h,omitempty"`
-	VolumeRatio1h        *float64        `json:"volume_ratio_1h,omitempty"`
-	Summary              string          `json:"summary"`
-	SignalChanged        bool            `json:"signal_changed"`
-	PreviousSignal       *string         `json:"previous_signal,omitempty"`
-	CreatedAt            time.Time       `json:"created_at"`
+    ID                   int64           `json:"id"`
+    AnalysisTime         time.Time       `json:"analysis_time"`
+    Price                float64         `json:"price,string"`
+    SignalType           string          `json:"signal_type"`
+    SignalDirection      string          `json:"signal_direction"`
+    SignalConfidence     float64         `json:"signal_confidence"`
+    
+    // Trade setup
+    EntryPrice           *float64        `json:"entry_price,string,omitempty"`
+    StopLoss             *float64        `json:"stop_loss,string,omitempty"`
+    TakeProfit1          *float64        `json:"take_profit_1,string,omitempty"`
+    TakeProfit2          *float64        `json:"take_profit_2,string,omitempty"`
+    TakeProfit3          *float64        `json:"take_profit_3,string,omitempty"`
+    RiskRewardRatio      *float64        `json:"risk_reward_ratio,omitempty"`
+    
+    // Signal reasoning
+    SignalFactors        json.RawMessage `json:"signal_factors,omitempty"`
+    
+    // Trends (enhanced)
+    Trends               json.RawMessage `json:"trends"`
+    
+    // Complete pivot data
+    PivotDaily           *float64        `json:"pivot_daily,string,omitempty"`
+    PivotR3Traditional   *float64        `json:"pivot_r3_traditional,string,omitempty"`
+    PivotR2Traditional   *float64        `json:"pivot_r2_traditional,string,omitempty"`
+    PivotR1Traditional   *float64        `json:"pivot_r1_traditional,string,omitempty"`
+    PivotS1Traditional   *float64        `json:"pivot_s1_traditional,string,omitempty"`
+    PivotS2Traditional   *float64        `json:"pivot_s2_traditional,string,omitempty"`
+    PivotS3Traditional   *float64        `json:"pivot_s3_traditional,string,omitempty"`
+    PivotR3Fibonacci     *float64        `json:"pivot_r3_fibonacci,string,omitempty"`
+    PivotR2Fibonacci     *float64        `json:"pivot_r2_fibonacci,string,omitempty"`
+    PivotR1Fibonacci     *float64        `json:"pivot_r1_fibonacci,string,omitempty"`
+    PivotS1Fibonacci     *float64        `json:"pivot_s1_fibonacci,string,omitempty"`
+    PivotS2Fibonacci     *float64        `json:"pivot_s2_fibonacci,string,omitempty"`
+    PivotS3Fibonacci     *float64        `json:"pivot_s3_fibonacci,string,omitempty"`
+    PivotR4Camarilla     *float64        `json:"pivot_r4_camarilla,string,omitempty"`
+    PivotR3Camarilla     *float64        `json:"pivot_r3_camarilla,string,omitempty"`
+    PivotS3Camarilla     *float64        `json:"pivot_s3_camarilla,string,omitempty"`
+    PivotS4Camarilla     *float64        `json:"pivot_s4_camarilla,string,omitempty"`
+    PivotConfluenceZones json.RawMessage `json:"pivot_confluence_zones,omitempty"`
+    PriceVsPivot         *string         `json:"price_vs_pivot,omitempty"`
+    
+    // SMC (complete)
+    SMCBias              *string         `json:"smc_bias,omitempty"`
+    SMCPriceZone         *string         `json:"smc_price_zone,omitempty"`
+    SMCEquilibrium       *float64        `json:"smc_equilibrium,string,omitempty"`
+    SMCOrderBlocks       json.RawMessage `json:"smc_order_blocks,omitempty"`
+    SMCFVGs              json.RawMessage `json:"smc_fvgs,omitempty"`
+    SMCBreaks            json.RawMessage `json:"smc_breaks,omitempty"`
+    SMCLiquidity         json.RawMessage `json:"smc_liquidity,omitempty"`
+    
+    // Support/Resistance (all levels)
+    SupportLevels        json.RawMessage `json:"support_levels,omitempty"`
+    ResistanceLevels     json.RawMessage `json:"resistance_levels,omitempty"`
+    
+    // Momentum (all timeframes)
+    Momentum             json.RawMessage `json:"momentum,omitempty"`
+    
+    // Market structure
+    StructurePattern     *string         `json:"structure_pattern,omitempty"`
+    StructureLastHigh    *float64        `json:"structure_last_high,string,omitempty"`
+    StructureLastLow     *float64        `json:"structure_last_low,string,omitempty"`
+    
+    // Warnings
+    Warnings             json.RawMessage `json:"warnings,omitempty"`
+    ActionRecommendation *string         `json:"action_recommendation,omitempty"`
+    
+    // Summary
+    Summary              *string         `json:"summary,omitempty"`
+    SignalChanged        bool            `json:"signal_changed"`
+    PreviousSignal       *string         `json:"previous_signal,omitempty"`
+    CreatedAt            time.Time       `json:"created_at"`
 }
 
 type MarketSignal struct {
-	ID                  int64     `json:"id"`
-	SignalTime          time.Time `json:"signal_time"`
-	SignalType          string    `json:"signal_type"`
-	SignalDirection     string    `json:"signal_direction"`
-	SignalConfidence    float64   `json:"signal_confidence"`
-	Price               float64   `json:"price,string"`
-	EntryPrice          *float64  `json:"entry_price,string,omitempty"`
-	StopLoss            *float64  `json:"stop_loss,string,omitempty"`
-	TakeProfit1         *float64  `json:"take_profit_1,string,omitempty"`
-	TakeProfit2         *float64  `json:"take_profit_2,string,omitempty"`
-	TakeProfit3         *float64  `json:"take_profit_3,string,omitempty"`
-	RiskRewardRatio     *float64  `json:"risk_reward_ratio,omitempty"`
-	PreviousSignalType  *string   `json:"previous_signal_type,omitempty"`
-	PreviousDirection   *string   `json:"previous_direction,omitempty"`
-	Summary             string    `json:"summary"`
-	KeyReasons          []string  `json:"key_reasons"`
-	CreatedAt           time.Time `json:"created_at"`
+    ID                   int64           `json:"id"`
+    SignalTime           time.Time       `json:"signal_time"`
+    SignalType           string          `json:"signal_type"`
+    SignalDirection      string          `json:"signal_direction"`
+    SignalConfidence     float64         `json:"signal_confidence"`
+    Price                float64         `json:"price,string"`
+    EntryPrice           *float64        `json:"entry_price,string,omitempty"`
+    StopLoss             *float64        `json:"stop_loss,string,omitempty"`
+    TakeProfit1          *float64        `json:"take_profit_1,string,omitempty"`
+    TakeProfit2          *float64        `json:"take_profit_2,string,omitempty"`
+    TakeProfit3          *float64        `json:"take_profit_3,string,omitempty"`
+    RiskRewardRatio      *float64        `json:"risk_reward_ratio,omitempty"`
+    PreviousSignalType   *string         `json:"previous_signal_type,omitempty"`
+    PreviousDirection    *string         `json:"previous_direction,omitempty"`
+    Summary              *string         `json:"summary,omitempty"`
+    KeyReasons           json.RawMessage `json:"key_reasons,omitempty"` // Changed from TEXT[] to JSONB
+    CreatedAt            time.Time       `json:"created_at"`
 }
 
 func main() {
@@ -501,11 +545,22 @@ func getMarketAnalysisHandler(w http.ResponseWriter, r *http.Request) {
 
 	signalType := r.URL.Query().Get("signal_type")
 
-	query := `SELECT id, analysis_time, price, signal_type, signal_direction, signal_confidence,
+	query := `SELECT 
+		id, analysis_time, price, signal_type, signal_direction, signal_confidence,
 		entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3, risk_reward_ratio,
-		trends, nearest_support, nearest_resistance, support_strength, resistance_strength,
-		smc_bias, price_zone, equilibrium_price, daily_pivot, price_vs_pivot,
-		rsi_1h, volume_ratio_1h, summary, signal_changed, previous_signal, created_at
+		signal_factors, trends,
+		pivot_daily, pivot_r3_traditional, pivot_r2_traditional, pivot_r1_traditional,
+		pivot_s1_traditional, pivot_s2_traditional, pivot_s3_traditional,
+		pivot_r3_fibonacci, pivot_r2_fibonacci, pivot_r1_fibonacci,
+		pivot_s1_fibonacci, pivot_s2_fibonacci, pivot_s3_fibonacci,
+		pivot_r4_camarilla, pivot_r3_camarilla, pivot_s3_camarilla, pivot_s4_camarilla,
+		pivot_confluence_zones, price_vs_pivot,
+		smc_bias, smc_price_zone, smc_equilibrium,
+		smc_order_blocks, smc_fvgs, smc_breaks, smc_liquidity,
+		support_levels, resistance_levels, momentum,
+		structure_pattern, structure_last_high, structure_last_low,
+		warnings, action_recommendation,
+		summary, signal_changed, previous_signal, created_at
 		FROM market_analysis WHERE 1=1`
 
 	args := []interface{}{}

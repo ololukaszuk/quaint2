@@ -219,10 +219,92 @@ First break of structure against the trend. Signals potential reversal.
 ### Liquidity Pools
 Equal highs = buy-side liquidity (stops above). Equal lows = sell-side liquidity (stops below). Smart money hunts these before reversing.
 
+## Database Schema
+
+### Tables
+
+#### `market_analysis`
+Stores every analysis snapshot with complete market context.
+
+**Key fields:**
+- `signal_type`, `signal_direction`, `signal_confidence` - Trading signal
+- `signal_factors` (JSONB) - Top 10 weighted factors with bar chart data
+- `trends` (JSONB) - Multi-timeframe trend data with EMA and structure
+- `pivot_*` columns - All pivot levels (Traditional, Fibonacci, Camarilla)
+- `pivot_confluence_zones` (JSONB) - Where multiple methods agree
+- `smc_*` columns - Complete SMC data (order blocks, FVGs, breaks, liquidity)
+- `support_levels`, `resistance_levels` (JSONB) - All S/R levels with metadata
+- `momentum` (JSONB) - RSI, volume, taker buy for all timeframes
+- `structure_pattern`, `structure_last_high/low` - Market structure
+- `warnings` (JSONB) - Risk alerts and warnings
+- `action_recommendation` - WAIT, LONG, SHORT
+
+**Retention:** 3 months
+
+#### `market_signals`
+Stores only signal CHANGES for alerting and backtesting.
+
+**Key fields:**
+- Signal info and trade setup
+- `key_reasons` (JSONB) - Top reasons with weights
+- `previous_signal_type`, `previous_direction` - What changed
+
+**Retention:** 6 months
+
+### Schema Version History
+
+**v1.0** (Original)
+- Basic signal and trend data
+- Single support/resistance levels
+- Limited momentum (1h only)
+
+**v2.0** (Enhanced - Current)
+- Complete log data capture
+- All pivot methods and confluence
+- Complete SMC analysis
+- All S/R levels with metadata
+- Momentum for all timeframes
+- Market structure and warnings
+- Weighted signal factors
+
+### Migration
+
+To upgrade from v1.0 to v2.0 schema:
+
+```bash
+# Backup first!
+docker exec btc-ml-timescaledb pg_dump -U mltrader -d btc_ml_production > backup.sql
+
+# Apply migration
+docker cp migrations/migrate_to_enhanced_schema.sql btc-ml-timescaledb:/tmp/
+docker exec -it btc-ml-timescaledb psql -U mltrader -d btc_ml_production -f /tmp/migrate_to_enhanced_schema.sql
+
+# Update code and restart
+docker-compose restart market-analyzer
+```
+
+See `migrations/MIGRATION_GUIDE.md` for detailed instructions.
+
+### Data Access
+
+All analysis data is available via the `data-api` service:
+
+```bash
+# Get latest analysis with complete data
+curl -k -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://localhost:8443/api/v1/market-analysis?limit=1"
+
+# Get recent signal changes
+curl -k -H "Authorization: Bearer YOUR_API_KEY" \
+  "https://localhost:8443/api/v1/market-signals?limit=10"
+```
+
+The API returns exactly the same data shown in logs - all pivot levels, SMC data, weighted factors, warnings, etc.
+
 ## Future Enhancements
 
 - [ ] Telegram/Discord notifications
-- [ ] Store signals in database for backtesting
+- [x] Store signals in database for backtesting (✅ Implemented)
 - [ ] Web dashboard
 - [ ] Pattern recognition (double top, H&S)
 - [ ] Order flow analysis (CVD, delta)
