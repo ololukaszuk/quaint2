@@ -18,7 +18,8 @@ services:
       - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./ml-layer-1/migrations/001_ml_tables.sql:/docker-entrypoint-initdb.d/02-ml-tables.sql
       - ./market-analyzer/migrations/001_market_analyzer_tables.sql:/docker-entrypoint-initdb.d/03-market-analyzer.sql
-      - ./llm-analyst/migrations/001_llm_analyst_tables.sql:/docker-entrypoint-initdb.d/04-llm-analyst.sql
+      - ./market-analyzer/migrations/002_enhanced_schema.sql:/docker-entrypoint-initdb.d/04-market-analyzer-enhancements.sql
+      - ./llm-analyst/migrations/001_llm_analyst_tables.sql:/docker-entrypoint-initdb.d/05-llm-analyst.sql
     command: >
       postgres
       -c shared_preload_libraries=timescaledb,pg_cron
@@ -356,8 +357,8 @@ volumes:
     driver: local
   pgadmin_data:
     driver: local
-  ml_models:
-    driver: local
+  #ml_models:
+  #  driver: local
 
 networks:
   btc-ml-network:
