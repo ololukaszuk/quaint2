@@ -22,6 +22,7 @@ import (
 var (
 	db     *pgxpool.Pool
 	logger *log.Logger
+	apiKey string
 )
 
 // Response structures
@@ -136,6 +137,13 @@ type MarketSignal struct {
 func main() {
 	logger = log.New(os.Stdout, "[DATA-API] ", log.LstdFlags)
 
+	// Load API key from environment
+	apiKey = os.Getenv("API_KEY")
+	if apiKey == "" {
+		logger.Fatal("API_KEY environment variable is required for authentication")
+	}
+	logger.Printf("✅ API key authentication enabled (key length: %d)", len(apiKey))
+
 	// Connect to database
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -158,14 +166,20 @@ func main() {
 	// Setup router
 	r := mux.NewRouter()
 
-	// API routes
+	// API routes (all protected except health)
 	api := r.PathPrefix("/api/v1").Subrouter()
+	
+	// Public endpoint (no auth required)
 	api.HandleFunc("/health", healthHandler).Methods("GET")
-	api.HandleFunc("/candles", getCandlesHandler).Methods("GET")
-	api.HandleFunc("/data-quality-logs", getDataQualityLogsHandler).Methods("GET")
-	api.HandleFunc("/llm-analysis", getLLMAnalysisHandler).Methods("GET")
-	api.HandleFunc("/market-analysis", getMarketAnalysisHandler).Methods("GET")
-	api.HandleFunc("/market-signals", getMarketSignalsHandler).Methods("GET")
+	
+	// Protected endpoints (require API key)
+	protected := api.PathPrefix("").Subrouter()
+	protected.Use(apiKeyMiddleware)
+	protected.HandleFunc("/candles", getCandlesHandler).Methods("GET")
+	protected.HandleFunc("/data-quality-logs", getDataQualityLogsHandler).Methods("GET")
+	protected.HandleFunc("/llm-analysis", getLLMAnalysisHandler).Methods("GET")
+	protected.HandleFunc("/market-analysis", getMarketAnalysisHandler).Methods("GET")
+	protected.HandleFunc("/market-signals", getMarketSignalsHandler).Methods("GET")
 
 	// CORS
 	c := cors.New(cors.Options{
@@ -244,6 +258,39 @@ func main() {
 	}
 
 	logger.Println("✅ Server stopped")
+}
+
+// apiKeyMiddleware validates API key in Authorization header
+func apiKeyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Get Authorization header
+		authHeader := r.Header.Get("Authorization")
+		
+		// Check format: "Bearer <api-key>"
+		const bearerPrefix = "Bearer "
+		if !strings.HasPrefix(authHeader, bearerPrefix) {
+			logger.Printf("❌ Unauthorized request from %s: missing or invalid Authorization header", r.RemoteAddr)
+			respondJSON(w, http.StatusUnauthorized, APIResponse{
+				Success: false,
+				Error:   "Unauthorized: missing or invalid Authorization header. Use: Authorization: Bearer <api-key>",
+			})
+			return
+		}
+		
+		// Extract and validate token
+		token := strings.TrimPrefix(authHeader, bearerPrefix)
+		if token != apiKey {
+			logger.Printf("❌ Unauthorized request from %s: invalid API key", r.RemoteAddr)
+			respondJSON(w, http.StatusUnauthorized, APIResponse{
+				Success: false,
+				Error:   "Unauthorized: invalid API key",
+			})
+			return
+		}
+		
+		// Valid API key - proceed
+		next.ServeHTTP(w, r)
+	})
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {

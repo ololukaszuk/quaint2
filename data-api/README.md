@@ -1,9 +1,10 @@
 # Data API Service
 
-Secure REST API for accessing BTC trading data from TimescaleDB with HTTPS support (self-signed or custom certificates).
+Secure REST API for accessing BTC trading data from TimescaleDB with **API Key authentication** and HTTPS support.
 
 ## Features
 
+- 🔐 **API Key authentication** - Bearer token protection
 - ✅ **HTTPS by default** with self-signed certificates
 - ✅ **Custom certificate support** via mounted volumes
 - ✅ **5 REST endpoints** for different data types
@@ -14,10 +15,27 @@ Secure REST API for accessing BTC trading data from TimescaleDB with HTTPS suppo
 
 ## Quick Start
 
-### 1. Environment Variables
+### 1. Generate API Key
+
+**Generate a secure API key:**
+```bash
+# On Linux/Mac
+openssl rand -base64 32
+
+# Or use Python
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# Example output:
+# k7x9mP2nQ4vL8wR5tY6uI3oP1aS0dF9gH2jK4lM7nB5c
+```
+
+### 2. Environment Variables
 
 Required in `.env`:
 ```bash
+# API Key (REQUIRED - use output from above command)
+DATA_API_KEY=k7x9mP2nQ4vL8wR5tY6uI3oP1aS0dF9gH2jK4lM7nB5c
+
 # Database connection
 DATABASE_URL=postgresql://mltrader:your_password@timescaledb:5432/btc_ml_production
 
@@ -28,7 +46,7 @@ TLS_CERT_FILE=/certs/custom.crt  # Optional: custom certificate
 TLS_KEY_FILE=/certs/custom.key   # Optional: custom key
 ```
 
-### 2. Start Service
+### 3. Start Service
 
 **With Docker Compose:**
 ```bash
@@ -41,11 +59,12 @@ docker build -t data-api ./data-api
 docker run -p 8443:8443 --env-file .env data-api
 ```
 
-### 3. Test Connection
+### 4. Test Connection
 
-**With self-signed cert (ignore SSL warning):**
+**Include API key in Authorization header:**
 ```bash
-curl -k https://localhost:8443/api/v1/health
+curl -k -H "Authorization: Bearer k7x9mP2nQ4vL8wR5tY6uI3oP1aS0dF9gH2jK4lM7nB5c" \
+  https://localhost:8443/api/v1/health
 ```
 
 **Response:**
@@ -59,6 +78,49 @@ curl -k https://localhost:8443/api/v1/health
   }
 }
 ```
+
+## Authentication
+
+### API Key Format
+
+All protected endpoints require an API key in the `Authorization` header:
+
+```
+Authorization: Bearer <your-api-key>
+```
+
+### Public Endpoints (No Auth Required)
+
+- `GET /api/v1/health` - Health check
+
+### Protected Endpoints (Auth Required)
+
+All data endpoints require authentication:
+- `GET /api/v1/candles`
+- `GET /api/v1/data-quality-logs`
+- `GET /api/v1/llm-analysis`
+- `GET /api/v1/market-analysis`
+- `GET /api/v1/market-signals`
+
+### Authentication Errors
+
+**Missing header:**
+```json
+{
+  "success": false,
+  "error": "Unauthorized: missing or invalid Authorization header. Use: Authorization: Bearer <api-key>"
+}
+```
+HTTP Status: `401 Unauthorized`
+
+**Invalid API key:**
+```json
+{
+  "success": false,
+  "error": "Unauthorized: invalid API key"
+}
+```
+HTTP Status: `401 Unauthorized`
 
 ## API Endpoints
 
@@ -80,6 +142,7 @@ Check service and database connectivity.
 
 **Example:**
 ```bash
+# Health check (no auth required)
 curl -k https://localhost:8443/api/v1/health
 ```
 
@@ -89,7 +152,7 @@ curl -k https://localhost:8443/api/v1/health
 
 **GET** `/api/v1/candles`
 
-Get 1-minute candle data.
+Get 1-minute candle data. **Requires authentication.**
 
 **Query Parameters:**
 - `limit` (int, default: 100, max: 10000) - Number of records
@@ -98,11 +161,16 @@ Get 1-minute candle data.
 
 **Example:**
 ```bash
+# Set your API key
+API_KEY="k7x9mP2nQ4vL8wR5tY6uI3oP1aS0dF9gH2jK4lM7nB5c"
+
 # Get latest 100 candles
-curl -k "https://localhost:8443/api/v1/candles?limit=100"
+curl -k -H "Authorization: Bearer $API_KEY" \
+  "https://localhost:8443/api/v1/candles?limit=100"
 
 # Get candles in time range
-curl -k "https://localhost:8443/api/v1/candles?start_time=2025-12-16T19:00:00Z&end_time=2025-12-16T20:00:00Z"
+curl -k -H "Authorization: Bearer $API_KEY" \
+  "https://localhost:8443/api/v1/candles?start_time=2025-12-16T19:00:00Z&end_time=2025-12-16T20:00:00Z"
 ```
 
 **Response Fields:**
@@ -130,7 +198,7 @@ curl -k "https://localhost:8443/api/v1/candles?start_time=2025-12-16T19:00:00Z&e
 
 **GET** `/api/v1/data-quality-logs`
 
-Get data quality events (gaps, errors, cleanups).
+Get data quality events (gaps, errors, cleanups). **Requires authentication.**
 
 **Query Parameters:**
 - `limit` (int, default: 100, max: 1000)
@@ -139,11 +207,15 @@ Get data quality events (gaps, errors, cleanups).
 
 **Example:**
 ```bash
+API_KEY="your_api_key_here"
+
 # Get all unresolved gaps
-curl -k "https://localhost:8443/api/v1/data-quality-logs?event_type=gap_detected&resolved=false"
+curl -k -H "Authorization: Bearer $API_KEY" \
+  "https://localhost:8443/api/v1/data-quality-logs?event_type=gap_detected&resolved=false"
 
 # Get recent cleanup logs
-curl -k "https://localhost:8443/api/v1/data-quality-logs?event_type=cleanup&limit=10"
+curl -k -H "Authorization: Bearer $API_KEY" \
+  "https://localhost:8443/api/v1/data-quality-logs?event_type=cleanup&limit=10"
 ```
 
 **Response Fields:**
@@ -373,10 +445,14 @@ from urllib3.exceptions import InsecureRequestWarning
 # Disable SSL warnings for self-signed cert
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
+# Your API key
+API_KEY = "k7x9mP2nQ4vL8wR5tY6uI3oP1aS0dF9gH2jK4lM7nB5c"
+
 # Get latest candles
 response = requests.get(
     'https://localhost:8443/api/v1/candles',
     params={'limit': 100},
+    headers={'Authorization': f'Bearer {API_KEY}'},
     verify=False  # Skip SSL verification for self-signed
 )
 
@@ -385,6 +461,10 @@ if response.status_code == 200:
     if data['success']:
         candles = data['data']
         print(f"Got {data['count']} candles")
+elif response.status_code == 401:
+    print("Authentication failed - check your API key")
+else:
+    print(f"Error: {response.status_code}")
 ```
 
 ### JavaScript/Node.js
@@ -392,6 +472,9 @@ if response.status_code == 200:
 ```javascript
 const https = require('https');
 const axios = require('axios');
+
+// Your API key
+const API_KEY = 'k7x9mP2nQ4vL8wR5tY6uI3oP1aS0dF9gH2jK4lM7nB5c';
 
 // Create agent that accepts self-signed certificates
 const agent = new https.Agent({
@@ -401,6 +484,7 @@ const agent = new https.Agent({
 // Get market analysis
 axios.get('https://localhost:8443/api/v1/market-analysis', {
   params: { limit: 10 },
+  headers: { 'Authorization': `Bearer ${API_KEY}` },
   httpsAgent: agent
 })
 .then(response => {
@@ -408,7 +492,11 @@ axios.get('https://localhost:8443/api/v1/market-analysis', {
   console.log(response.data.data[0]);
 })
 .catch(error => {
-  console.error('Error:', error.message);
+  if (error.response?.status === 401) {
+    console.error('Authentication failed - check your API key');
+  } else {
+    console.error('Error:', error.message);
+  }
 });
 ```
 
@@ -425,17 +513,27 @@ import (
 )
 
 func main() {
+    apiKey := "k7x9mP2nQ4vL8wR5tY6uI3oP1aS0dF9gH2jK4lM7nB5c"
+    
     // Create client that accepts self-signed certificates
     tr := &http.Transport{
         TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
     }
     client := &http.Client{Transport: tr}
 
-    resp, err := client.Get("https://localhost:8443/api/v1/candles?limit=10")
+    req, _ := http.NewRequest("GET", "https://localhost:8443/api/v1/candles?limit=10", nil)
+    req.Header.Set("Authorization", "Bearer "+apiKey)
+    
+    resp, err := client.Do(req)
     if err != nil {
         panic(err)
     }
     defer resp.Body.Close()
+
+    if resp.StatusCode == 401 {
+        fmt.Println("Authentication failed - check your API key")
+        return
+    }
 
     var result map[string]interface{}
     json.NewDecoder(resp.Body).Decode(&result)
@@ -502,6 +600,41 @@ docker-compose logs --tail=100 data-api
 ---
 
 ## Troubleshooting
+
+### Issue: "Unauthorized: missing or invalid Authorization header"
+
+**Cause:** Missing or malformed API key in request
+
+**Solution:**
+```bash
+# ❌ Wrong - no auth header
+curl -k https://localhost:8443/api/v1/candles
+
+# ❌ Wrong - missing "Bearer " prefix
+curl -k -H "Authorization: your_key" https://localhost:8443/api/v1/candles
+
+# ✅ Correct
+curl -k -H "Authorization: Bearer your_key" https://localhost:8443/api/v1/candles
+```
+
+---
+
+### Issue: "Unauthorized: invalid API key"
+
+**Cause:** API key doesn't match the one in `.env`
+
+**Solution:**
+1. Check your API key in `.env`:
+   ```bash
+   grep DATA_API_KEY .env
+   ```
+2. Make sure you're using the exact same key in requests
+3. Restart service after changing `.env`:
+   ```bash
+   docker-compose restart data-api
+   ```
+
+---
 
 ### Issue: "connection refused"
 
@@ -604,23 +737,57 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO mltrader;
    - Get certificate from Let's Encrypt or your CA
    - Do NOT use self-signed certificates in production
 
-2. **Enable authentication** (not included, add as needed)
-   - API keys
-   - JWT tokens
-   - OAuth2
+2. **Secure API Key Management**
+   - Generate strong keys (32+ characters): `openssl rand -base64 32`
+   - Store in environment variables, never hardcode
+   - Use secrets management (AWS Secrets Manager, HashiCorp Vault, etc.)
+   - Rotate keys regularly (quarterly recommended)
+   - Use different keys for dev/staging/production
 
-3. **Rate limiting** (not included, add with nginx/traefik)
-   - Limit requests per IP
-   - Prevent abuse
+3. **Additional Security Layers**
+   - **Rate limiting** (add with nginx/traefik)
+   - **IP whitelisting** (restrict to known IPs)
+   - **Request logging** (monitor for suspicious activity)
+   - **HTTPS only** (never disable TLS in production)
 
 4. **Network isolation**
    - Keep database on private network
    - Expose only data-api to public
    - Use firewall rules
+   - Consider VPN or VPC for internal access
 
 5. **Read-only database user**
    - Grant only SELECT permissions
    - Prevent accidental modifications
+   ```sql
+   GRANT SELECT ON ALL TABLES IN SCHEMA public TO mltrader;
+   REVOKE INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public FROM mltrader;
+   ```
+
+6. **Monitoring & Alerts**
+   - Log all failed authentication attempts
+   - Alert on suspicious patterns (rapid requests, etc.)
+   - Monitor for API key leaks in public repos
+
+### API Key Security Best Practices
+
+```bash
+# ✅ DO: Use environment variables
+export DATA_API_KEY="$(openssl rand -base64 32)"
+docker-compose up data-api
+
+# ✅ DO: Use secrets management
+aws secretsmanager get-secret-value --secret-id data-api-key
+
+# ❌ DON'T: Hardcode in scripts
+curl -H "Authorization: Bearer hardcoded_key_123"  # BAD!
+
+# ❌ DON'T: Commit to git
+git add .env  # BAD! Use .env.example instead
+
+# ❌ DON'T: Share in chat/email
+# Use secure channels for key distribution
+```
 
 ---
 
@@ -648,13 +815,14 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO mltrader;
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DATABASE_URL` | *(required)* | PostgreSQL connection string |
-| `USE_TLS` | `true` | Enable HTTPS (`true`/`false`) |
-| `PORT` | `8443` (TLS) or `8080` | Server port |
-| `TLS_CERT_FILE` | `/certs/server.crt` | Path to SSL certificate |
-| `TLS_KEY_FILE` | `/certs/server.key` | Path to SSL private key |
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `DATABASE_URL` | *(none)* | **Yes** | PostgreSQL connection string |
+| `API_KEY` | *(none)* | **Yes** | API key for authentication (32+ chars) |
+| `USE_TLS` | `true` | No | Enable HTTPS (`true`/`false`) |
+| `PORT` | `8443` (TLS) or `8080` | No | Server port |
+| `TLS_CERT_FILE` | `/certs/server.crt` | No | Path to SSL certificate |
+| `TLS_KEY_FILE` | `/certs/server.key` | No | Path to SSL private key |
 
 ---
 
@@ -700,15 +868,18 @@ go build -o data-api main.go
 ### Run Tests
 
 ```bash
-# Test health endpoint
+# Set your API key
+export API_KEY="your_api_key_here"
+
+# Test health endpoint (no auth needed)
 curl -k https://localhost:8443/api/v1/health
 
-# Test each endpoint
-curl -k "https://localhost:8443/api/v1/candles?limit=1"
-curl -k "https://localhost:8443/api/v1/data-quality-logs?limit=1"
-curl -k "https://localhost:8443/api/v1/llm-analysis?limit=1"
-curl -k "https://localhost:8443/api/v1/market-analysis?limit=1"
-curl -k "https://localhost:8443/api/v1/market-signals?limit=1"
+# Test protected endpoints (auth required)
+curl -k -H "Authorization: Bearer $API_KEY" "https://localhost:8443/api/v1/candles?limit=1"
+curl -k -H "Authorization: Bearer $API_KEY" "https://localhost:8443/api/v1/data-quality-logs?limit=1"
+curl -k -H "Authorization: Bearer $API_KEY" "https://localhost:8443/api/v1/llm-analysis?limit=1"
+curl -k -H "Authorization: Bearer $API_KEY" "https://localhost:8443/api/v1/market-analysis?limit=1"
+curl -k -H "Authorization: Bearer $API_KEY" "https://localhost:8443/api/v1/market-signals?limit=1"
 ```
 
 ### Add New Endpoints
