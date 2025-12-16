@@ -208,12 +208,12 @@ class MarketAnalyzerService:
                 
                 # === 1. SIGNAL FACTORS (with weights) ===
                 signal_factors = []
-                if signal and signal.factors:
-                    for factor in signal.factors[:10]:  # Top 10 factors
+                if signal and signal.reasons:
+                    for reasons in signal.reasons[:10]:  # Top 10 reasons
                         signal_factors.append({
-                            "description": factor.description,
-                            "weight": factor.weight,
-                            "type": "bullish" if factor.weight > 0 else "bearish"
+                            "description": reasons.description,
+                            "weight": reasons.weight,
+                            "type": "bullish" if reasons.weight > 0 else "bearish"
                         })
                 
                 # === 2. TRENDS (enhanced with EMA and structure) ===

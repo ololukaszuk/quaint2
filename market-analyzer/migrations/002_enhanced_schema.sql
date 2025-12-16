@@ -174,7 +174,11 @@ SELECT add_retention_policy('market_signals_v2', INTERVAL '6 months', if_not_exi
 -- VIEWS
 -- ============================================================================
 
-CREATE OR REPLACE VIEW v_latest_analysis AS
+-- Drop existing views first
+DROP VIEW IF EXISTS v_latest_signal CASCADE;
+DROP VIEW IF EXISTS v_latest_analysis CASCADE;
+
+CREATE VIEW v_latest_analysis AS
 SELECT 
     analysis_time,
     price,
@@ -198,7 +202,7 @@ FROM market_analysis_v2
 ORDER BY analysis_time DESC
 LIMIT 1;
 
-CREATE OR REPLACE VIEW v_latest_signal AS
+CREATE VIEW v_latest_signal AS
 SELECT 
     signal_time,
     signal_type,
