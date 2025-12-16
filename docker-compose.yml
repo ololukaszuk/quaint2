@@ -146,99 +146,99 @@ services:
   # ============================================================================
   # ML Layer 1 - Training Service (on-demand, GPU)
   # ============================================================================
-  ml-trainer:
-    build:
-      context: ./ml-layer-1/training
-      dockerfile: Dockerfile
-    container_name: btc-ml-trainer
-    profiles:
-      - ml-training
-    runtime: nvidia
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    environment:
-      - DB_HOST=timescaledb
-      - DB_PORT=5432
-      - DB_NAME=btc_ml_production
-      - DB_USER=mltrader
-      - DB_PASSWORD=${DB_PASSWORD}
-      - ML_DEVICE=${ML_DEVICE:-cuda}
-      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
-      - PYTHONUNBUFFERED=1
-      - TRAINING_MONTHS=${TRAINING_MONTHS:-12}
-      - MAMBA_EPOCHS=${MAMBA_EPOCHS:-50}
-    volumes:
-      - ml_models:/app/models
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    networks:
-      - btc-ml-network
-    restart: "no"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "5"
+  # ml-trainer:
+    # build:
+      # context: ./ml-layer-1/training
+      # dockerfile: Dockerfile
+    # container_name: btc-ml-trainer
+    # profiles:
+      # - ml-training
+    # runtime: nvidia
+    # deploy:
+      # resources:
+        # reservations:
+          # devices:
+            # - driver: nvidia
+              # count: 1
+              # capabilities: [gpu]
+    # environment:
+      # - DB_HOST=timescaledb
+      # - DB_PORT=5432
+      # - DB_NAME=btc_ml_production
+      # - DB_USER=mltrader
+      # - DB_PASSWORD=${DB_PASSWORD}
+      # - ML_DEVICE=${ML_DEVICE:-cuda}
+      # - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+      # - PYTHONUNBUFFERED=1
+      # - TRAINING_MONTHS=${TRAINING_MONTHS:-12}
+      # - MAMBA_EPOCHS=${MAMBA_EPOCHS:-50}
+    # volumes:
+      # - ml_models:/app/models
+    # depends_on:
+      # timescaledb:
+        # condition: service_healthy
+    # networks:
+      # - btc-ml-network
+    # restart: "no"
+    # logging:
+      # driver: "json-file"
+      # options:
+        # max-size: "100m"
+        # max-file: "5"
 
   # ============================================================================
   # ML Layer 1 - Inference Service (always-on, GPU)
   # ============================================================================
-  ml-inference:
-    build:
-      context: ./ml-layer-1/inference
-      dockerfile: Dockerfile
-    container_name: btc-ml-inference
-    profiles:
-      - ml-inference
-    runtime: nvidia
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    environment:
-      - DB_HOST=timescaledb
-      - DB_PORT=5432
-      - DB_NAME=btc_ml_production
-      - DB_USER=mltrader
-      - DB_PASSWORD=${DB_PASSWORD}
-      - ML_ENABLED=${ML_ENABLED:-true}
-      - ML_DEVICE=${ML_DEVICE:-cuda}
-      - ML_MAMBA_WEIGHT=${ML_MAMBA_WEIGHT:-0.5}
-      - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
-      - RUST_LOG=${LOG_LEVEL:-info}
-      - ML_MAMBA_MODEL_PATH=/app/models/mamba.pt
-      - ML_LGBM_MODELS_DIR=/app/models
-      - ML_NORM_PARAMS_PATH=/app/models/normalization_params.json
-    ports:
-      - "${ML_INFERENCE_PORT:-8081}:8081"
-    volumes:
-      - ml_models:/app/models:ro
-    depends_on:
-      timescaledb:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    networks:
-      - btc-ml-network
-    restart: unless-stopped
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "100m"
-        max-file: "5"
+  # ml-inference:
+    # build:
+      # context: ./ml-layer-1/inference
+      # dockerfile: Dockerfile
+    # container_name: btc-ml-inference
+    # profiles:
+      # - ml-inference
+    # runtime: nvidia
+    # deploy:
+      # resources:
+        # reservations:
+          # devices:
+            # - driver: nvidia
+              # count: 1
+              # capabilities: [gpu]
+    # environment:
+      # - DB_HOST=timescaledb
+      # - DB_PORT=5432
+      # - DB_NAME=btc_ml_production
+      # - DB_USER=mltrader
+      # - DB_PASSWORD=${DB_PASSWORD}
+      # - ML_ENABLED=${ML_ENABLED:-true}
+      # - ML_DEVICE=${ML_DEVICE:-cuda}
+      # - ML_MAMBA_WEIGHT=${ML_MAMBA_WEIGHT:-0.5}
+      # - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+      # - RUST_LOG=${LOG_LEVEL:-info}
+      # - ML_MAMBA_MODEL_PATH=/app/models/mamba.pt
+      # - ML_LGBM_MODELS_DIR=/app/models
+      # - ML_NORM_PARAMS_PATH=/app/models/normalization_params.json
+    # ports:
+      # - "${ML_INFERENCE_PORT:-8081}:8081"
+    # volumes:
+      # - ml_models:/app/models:ro
+    # depends_on:
+      # timescaledb:
+        # condition: service_healthy
+    # healthcheck:
+      # test: ["CMD", "curl", "-fsS", "http://localhost:8081/health"]
+      # interval: 30s
+      # timeout: 10s
+      # retries: 3
+      # start_period: 60s
+    # networks:
+      # - btc-ml-network
+    # restart: unless-stopped
+    # logging:
+      # driver: "json-file"
+      # options:
+        # max-size: "100m"
+        # max-file: "5"
 
   # ============================================================================
   # Market Analyzer - Real-time market context analysis
