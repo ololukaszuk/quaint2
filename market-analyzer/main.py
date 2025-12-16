@@ -7,6 +7,7 @@ with trading signals, pivot points, and Smart Money Concepts analysis.
 """
 
 import asyncio
+import json
 import signal
 import sys
 from datetime import datetime, timezone
@@ -40,6 +41,10 @@ class MarketAnalyzerService:
         self.running = False
         self.last_candle_time: Optional[datetime] = None
         
+        # Track previous signal for change detection
+        self.previous_signal_type: Optional[str] = None
+        self.previous_signal_direction: Optional[str] = None
+        
     async def start(self):
         """Initialize and start the service."""
         logger.info("=" * 60)
@@ -62,6 +67,9 @@ class MarketAnalyzerService:
         else:
             logger.warning("No candles found in database yet")
         
+        # Load previous signal from DB if available
+        await self.load_previous_signal()
+        
         # Run initial analysis
         await self.run_analysis()
         
@@ -78,6 +86,28 @@ class MarketAnalyzerService:
             except Exception as e:
                 logger.error(f"Error in main loop: {e}")
                 await asyncio.sleep(5)
+    
+    async def load_previous_signal(self):
+        """Load the most recent signal from database."""
+        if not self.db or not self.db.pool:
+            return
+        
+        try:
+            async with self.db.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT signal_type, signal_direction 
+                    FROM market_signals 
+                    ORDER BY signal_time DESC 
+                    LIMIT 1
+                    """
+                )
+                if row:
+                    self.previous_signal_type = row['signal_type']
+                    self.previous_signal_direction = row['signal_direction']
+                    logger.info(f"Loaded previous signal: {self.previous_signal_type} ({self.previous_signal_direction})")
+        except Exception as e:
+            logger.debug(f"Could not load previous signal (table may not exist yet): {e}")
     
     async def check_for_new_candle(self):
         """Check if a new candle has arrived and trigger analysis."""
@@ -99,13 +129,201 @@ class MarketAnalyzerService:
         try:
             context = await self.analyzer.analyze()
             if context:
-                self.log_market_context(context)
+                # Check for signal change
+                signal_changed = self.detect_signal_change(context)
+                
+                # Log full report
+                self.log_market_context(context, signal_changed)
+                
+                # Save to database
+                await self.save_analysis(context, signal_changed)
+                
+                # Update previous signal tracking
+                if context.signal:
+                    self.previous_signal_type = context.signal.signal_type.value
+                    self.previous_signal_direction = context.signal.direction
+                    
         except Exception as e:
             logger.error(f"Analysis error: {e}")
             import traceback
             traceback.print_exc()
     
-    def log_market_context(self, ctx: MarketContext):
+    def detect_signal_change(self, ctx: MarketContext) -> bool:
+        """Check if signal has changed from previous analysis."""
+        if not ctx.signal:
+            return False
+        
+        current_type = ctx.signal.signal_type.value
+        current_direction = ctx.signal.direction
+        
+        # Signal changed if type or direction changed
+        if self.previous_signal_type is None:
+            return True  # First signal
+        
+        return (current_type != self.previous_signal_type or 
+                current_direction != self.previous_signal_direction)
+    
+    async def save_analysis(self, ctx: MarketContext, signal_changed: bool):
+        """Save analysis to database."""
+        if not self.db or not self.db.pool:
+            return
+        
+        try:
+            async with self.db.pool.acquire() as conn:
+                # Check if tables exist
+                table_exists = await conn.fetchval(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'market_analysis')"
+                )
+                
+                if not table_exists:
+                    logger.debug("market_analysis table doesn't exist yet - skipping save")
+                    return
+                
+                # Prepare data
+                signal = ctx.signal
+                trends_json = json.dumps({
+                    tf: {"direction": t.direction, "strength": t.strength}
+                    for tf, t in ctx.trends.items()
+                })
+                
+                nearest_support = ctx.support_levels[0].price if ctx.support_levels else None
+                support_strength = ctx.support_levels[0].strength if ctx.support_levels else None
+                nearest_resistance = ctx.resistance_levels[0].price if ctx.resistance_levels else None
+                resistance_strength = ctx.resistance_levels[0].strength if ctx.resistance_levels else None
+                
+                rsi_1h = ctx.momentum.get("1h", {})
+                rsi_1h_val = rsi_1h.rsi if hasattr(rsi_1h, 'rsi') else None
+                vol_1h = rsi_1h.volume_ratio if hasattr(rsi_1h, 'volume_ratio') else None
+                
+                # Generate summary
+                summary = self.generate_summary(ctx)
+                
+                # Insert into market_analysis
+                await conn.execute(
+                    """
+                    INSERT INTO market_analysis (
+                        analysis_time, price, signal_type, signal_direction, signal_confidence,
+                        entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3, risk_reward_ratio,
+                        trends, nearest_support, nearest_resistance, support_strength, resistance_strength,
+                        smc_bias, price_zone, equilibrium_price, daily_pivot, price_vs_pivot,
+                        rsi_1h, volume_ratio_1h, summary, signal_changed, previous_signal
+                    ) VALUES (
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                        $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
+                    )
+                    """,
+                    ctx.timestamp,
+                    ctx.current_price,
+                    signal.signal_type.value if signal else "NEUTRAL",
+                    signal.direction if signal else "NONE",
+                    signal.confidence if signal else 0,
+                    signal.setup.entry if signal and signal.setup else None,
+                    signal.setup.stop_loss if signal and signal.setup else None,
+                    signal.setup.take_profit_1 if signal and signal.setup else None,
+                    signal.setup.take_profit_2 if signal and signal.setup else None,
+                    signal.setup.take_profit_3 if signal and signal.setup else None,
+                    signal.setup.risk_reward_ratio if signal and signal.setup else None,
+                    trends_json,
+                    nearest_support,
+                    nearest_resistance,
+                    support_strength,
+                    resistance_strength,
+                    ctx.smc.current_bias if ctx.smc else None,
+                    self.get_price_zone(ctx),
+                    ctx.smc.equilibrium if ctx.smc else None,
+                    ctx.pivots.traditional.pivot if ctx.pivots else None,
+                    "ABOVE" if ctx.pivots and ctx.current_price > ctx.pivots.traditional.pivot else "BELOW",
+                    rsi_1h_val,
+                    vol_1h,
+                    summary,
+                    signal_changed,
+                    self.previous_signal_type
+                )
+                
+                # If signal changed, also insert into market_signals
+                if signal_changed and signal and signal.direction != "NONE":
+                    top_reasons = sorted(signal.reasons, key=lambda x: abs(x.weight), reverse=True)[:3]
+                    reasons_array = [r.description for r in top_reasons]
+                    
+                    await conn.execute(
+                        """
+                        INSERT INTO market_signals (
+                            signal_time, signal_type, signal_direction, signal_confidence,
+                            price, entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
+                            risk_reward_ratio, previous_signal_type, previous_direction, summary, key_reasons
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+                        """,
+                        ctx.timestamp,
+                        signal.signal_type.value,
+                        signal.direction,
+                        signal.confidence,
+                        ctx.current_price,
+                        signal.setup.entry if signal.setup else None,
+                        signal.setup.stop_loss if signal.setup else None,
+                        signal.setup.take_profit_1 if signal.setup else None,
+                        signal.setup.take_profit_2 if signal.setup else None,
+                        signal.setup.take_profit_3 if signal.setup else None,
+                        signal.setup.risk_reward_ratio if signal.setup else None,
+                        self.previous_signal_type,
+                        self.previous_signal_direction,
+                        summary,
+                        reasons_array
+                    )
+                    logger.info(f"💾 Signal change saved to database")
+                    
+        except Exception as e:
+            logger.debug(f"Could not save analysis to database: {e}")
+    
+    def get_price_zone(self, ctx: MarketContext) -> str:
+        """Get current price zone from SMC analysis."""
+        if not ctx.smc:
+            return "UNKNOWN"
+        if ctx.current_price < ctx.smc.discount_zone[1]:
+            return "DISCOUNT"
+        elif ctx.current_price > ctx.smc.premium_zone[0]:
+            return "PREMIUM"
+        return "EQUILIBRIUM"
+    
+    def generate_summary(self, ctx: MarketContext) -> str:
+        """Generate 2-3 line human readable summary."""
+        parts = []
+        
+        # Price and signal
+        signal = ctx.signal
+        if signal:
+            if signal.direction == "LONG":
+                parts.append(f"BTC ${ctx.current_price:,.0f} - {signal.signal_type.value} ({signal.confidence:.0f}% confidence)")
+            elif signal.direction == "SHORT":
+                parts.append(f"BTC ${ctx.current_price:,.0f} - {signal.signal_type.value} ({signal.confidence:.0f}% confidence)")
+            else:
+                parts.append(f"BTC ${ctx.current_price:,.0f} - No clear signal, market undecided")
+        
+        # Trend summary
+        trend_4h = ctx.trends.get("4h")
+        trend_1h = ctx.trends.get("1h")
+        if trend_4h and trend_1h:
+            if trend_4h.direction == trend_1h.direction:
+                parts.append(f"Trend aligned {trend_4h.direction} on 1H/4H")
+            else:
+                parts.append(f"Trend conflict: 1H {trend_1h.direction}, 4H {trend_4h.direction}")
+        
+        # Key level proximity
+        if ctx.support_levels and ctx.resistance_levels:
+            sup = ctx.support_levels[0]
+            res = ctx.resistance_levels[0]
+            sup_dist = (ctx.current_price - sup.price) / ctx.current_price * 100
+            res_dist = (res.price - ctx.current_price) / ctx.current_price * 100
+            
+            if sup_dist < 0.5:
+                parts.append(f"⚠️ At support ${sup.price:,.0f}")
+            elif res_dist < 0.5:
+                parts.append(f"⚠️ At resistance ${res.price:,.0f}")
+            else:
+                parts.append(f"S: ${sup.price:,.0f} ({sup_dist:.1f}%) | R: ${res.price:,.0f} ({res_dist:.1f}%)")
+        
+        return " | ".join(parts)
+    
+    def log_market_context(self, ctx: MarketContext, signal_changed: bool):
         """Log market context in a readable format."""
         logger.info("")
         logger.info("=" * 80)
@@ -115,6 +333,13 @@ class MarketAnalyzerService:
         # Current price
         logger.info(f"💰 Current Price: ${ctx.current_price:,.2f}")
         logger.info("")
+        
+        # ===== SIGNAL CHANGE ALERT =====
+        if signal_changed and ctx.signal and ctx.signal.direction != "NONE":
+            logger.info("🔔" * 20)
+            logger.info(f"🔔 SIGNAL CHANGED! {self.previous_signal_type} → {ctx.signal.signal_type.value}")
+            logger.info("🔔" * 20)
+            logger.info("")
         
         # ===== TRADING SIGNAL (most important - show first) =====
         if ctx.signal:
@@ -194,12 +419,28 @@ class MarketAnalyzerService:
         warnings = list(dict.fromkeys(warnings))
         
         if warnings:
-            for warning in warnings:
+            for warning in warnings[:5]:  # Max 5 warnings
                 logger.warning(f"  {warning}")
         else:
             logger.info("  ✅ No specific warnings - conditions favorable")
-        
         logger.info("")
+        
+        # ===== SUMMARY (2-3 lines at the end) =====
+        summary = self.generate_summary(ctx)
+        logger.info("=" * 80)
+        logger.info("📋 SUMMARY")
+        logger.info("=" * 80)
+        logger.info(f"  {summary}")
+        
+        # Quick action line
+        if ctx.signal:
+            if ctx.signal.direction == "LONG" and ctx.signal.confidence >= 60:
+                logger.info(f"  ➡️  ACTION: Consider LONG entry at ${ctx.current_price:,.0f}, SL ${ctx.signal.setup.stop_loss:,.0f if ctx.signal.setup else 'N/A'}")
+            elif ctx.signal.direction == "SHORT" and ctx.signal.confidence >= 60:
+                logger.info(f"  ➡️  ACTION: Consider SHORT entry at ${ctx.current_price:,.0f}, SL ${ctx.signal.setup.stop_loss:,.0f if ctx.signal.setup else 'N/A'}")
+            else:
+                logger.info(f"  ➡️  ACTION: WAIT - No high-confidence setup")
+        
         logger.info("=" * 80)
         logger.info("")
     
@@ -276,8 +517,6 @@ class MarketAnalyzerService:
             
             logger.info(f"  {emoji} [{sign}{weight_pct:4.0f}%] {weight_bar} {reason.description[:50]}")
         
-        logger.info("")
-        logger.info(f"📝 Summary: {signal.summary}")
         logger.info("")
     
     def log_pivots(self, pivots, current_price: float):
@@ -390,16 +629,6 @@ class MarketAnalyzerService:
                 levels = ", ".join([f"${l:,.0f}" for l in smc.sell_side_liquidity[:3]])
                 logger.info(f"     📉 Sell-side (below): {levels}")
         
-        # Recent sweeps
-        if smc.liquidity_sweeps:
-            logger.info("")
-            logger.info("  ⚡ Recent Liquidity Sweeps:")
-            for sweep in smc.liquidity_sweeps[-2:]:
-                if sweep.type == "HIGH_SWEEP":
-                    logger.info(f"     🔴 Swept highs at ${sweep.sweep_level:,.0f} - potential reversal DOWN")
-                else:
-                    logger.info(f"     🟢 Swept lows at ${sweep.sweep_level:,.0f} - potential reversal UP")
-        
         logger.info("")
     
     def generate_warnings(self, ctx: MarketContext) -> list[str]:
@@ -452,6 +681,19 @@ class MarketAnalyzerService:
             # Price in discount zone trying to short
             if ctx.current_price < ctx.smc.discount_zone[1] and ctx.signal and ctx.signal.direction == "SHORT":
                 warnings.append("⚠️ Attempting SHORT in DISCOUNT zone - higher risk entry")
+            
+            # Liquidity sweeps - only show most significant (max 2)
+            high_sweeps = [s for s in ctx.smc.liquidity_sweeps if s.type == "HIGH_SWEEP"]
+            low_sweeps = [s for s in ctx.smc.liquidity_sweeps if s.type == "LOW_SWEEP"]
+            
+            if high_sweeps:
+                # Get the most significant (highest strength)
+                best_high = max(high_sweeps, key=lambda x: x.strength)
+                warnings.append(f"⚠️ Liquidity swept above ${best_high.sweep_level:,.0f} - watch for reversal DOWN")
+            
+            if low_sweeps:
+                best_low = max(low_sweeps, key=lambda x: x.strength)
+                warnings.append(f"⚠️ Liquidity swept below ${best_low.sweep_level:,.0f} - watch for reversal UP")
         
         return warnings
     

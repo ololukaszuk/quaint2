@@ -25,7 +25,18 @@ class Config:
     timeframes: List[str] = field(default_factory=lambda: ["5m", "15m", "1h", "4h", "1d"])
     
     # How much historical data to load for each timeframe analysis
-    lookback_candles: int = field(default_factory=lambda: int(os.getenv("LOOKBACK_CANDLES", "500")))
+    # For 1d candles we need: 365 days * 1440 minutes = 525,600 1m candles
+    # We'll fetch enough to have ~200 daily candles for good S/R detection
+    lookback_candles_1m: int = field(default_factory=lambda: int(os.getenv("LOOKBACK_CANDLES", "300000")))  # ~208 days
+    
+    # Candles per timeframe for analysis (after aggregation)
+    lookback_per_tf: dict = field(default_factory=lambda: {
+        "5m": 500,
+        "15m": 400,
+        "1h": 300,
+        "4h": 200,
+        "1d": 180,  # ~6 months of daily candles
+    })
     
     # Support/Resistance detection
     sr_min_touches: int = 2

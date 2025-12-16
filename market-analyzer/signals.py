@@ -603,12 +603,8 @@ class SignalGenerator:
             ))
             score -= 0.15
         
-        # Liquidity sweep warnings
-        for sweep in smc.liquidity_sweeps:
-            if sweep.type == "HIGH_SWEEP":
-                warnings.append(f"⚠️ Recent liquidity sweep above ${sweep.sweep_level:,.0f} - potential reversal down")
-            else:
-                warnings.append(f"⚠️ Recent liquidity sweep below ${sweep.sweep_level:,.0f} - potential reversal up")
+        # Liquidity pools - show in log but don't spam warnings
+        # (warnings are handled separately in main.py)
         
         return np.clip(score, -1.0, 1.0), reasons, warnings
     

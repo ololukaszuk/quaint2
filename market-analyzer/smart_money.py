@@ -463,8 +463,13 @@ def find_liquidity_pools(
                     break
     
     # Sort by proximity to current price
-    buy_side.sort(key=lambda x: abs(x - current_price))
-    sell_side.sort(key=lambda x: abs(x - current_price))
+    # Buy-side = ABOVE current price (these are stops above)
+    # Sell-side = BELOW current price (these are stops below)
+    buy_side = [l for l in buy_side if l > current_price]
+    sell_side = [l for l in sell_side if l < current_price]
+    
+    buy_side.sort(key=lambda x: x - current_price)  # Nearest above first
+    sell_side.sort(key=lambda x: current_price - x)  # Nearest below first
     
     return buy_side[:5], sell_side[:5], sweeps
 

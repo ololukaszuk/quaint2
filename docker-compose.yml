@@ -17,6 +17,7 @@ services:
       - timescaledb_data:/var/lib/postgresql/data
       - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/01-init.sql
       - ./ml-layer-1/migrations/001_ml_tables.sql:/docker-entrypoint-initdb.d/02-ml-tables.sql
+      - ./market-analyzer/migrations/001_market_analyzer_tables.sql:/docker-entrypoint-initdb.d/03-market-analyzer-tables.sql
     command: >
       postgres
       -c shared_preload_libraries=timescaledb,pg_cron

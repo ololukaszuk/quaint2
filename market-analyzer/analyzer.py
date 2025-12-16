@@ -49,25 +49,20 @@ class MarketAnalyzer:
         Returns:
             MarketContext object with complete analysis, or None if insufficient data
         """
-        # Calculate how many 1m candles we need
-        # For 1d candles, we need quite a lot (1440 * lookback)
-        max_tf_minutes = max(
-            {"5m": 5, "15m": 15, "1h": 60, "4h": 240, "1d": 1440}.get(tf, 1) 
-            for tf in self.config.timeframes
-        )
-        required_candles = self.config.lookback_candles * max_tf_minutes // 60
-        required_candles = max(required_candles, 2000)  # At least 2000 1m candles
+        # Calculate how many 1m candles we need for all timeframes
+        # For daily candles: need ~180 days * 1440 min = 259,200 candles
+        required_candles = self.config.lookback_candles_1m
         
-        logger.debug(f"Fetching {required_candles} 1m candles for analysis")
+        logger.debug(f"Fetching {required_candles:,} 1m candles for analysis")
         
         # Fetch 1m candles
         candles_1m = await self.db.get_candles(limit=required_candles)
         
-        if len(candles_1m) < 100:
+        if len(candles_1m) < 1000:
             logger.warning(f"Insufficient data: only {len(candles_1m)} candles")
             return None
         
-        logger.debug(f"Loaded {len(candles_1m)} 1m candles")
+        logger.debug(f"Loaded {len(candles_1m):,} 1m candles ({len(candles_1m)/1440:.1f} days)")
         
         # Build multi-timeframe data
         tf_data = build_multi_timeframe_data(candles_1m, self.config.timeframes)
