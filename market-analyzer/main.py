@@ -228,7 +228,11 @@ class MarketAnalyzerService:
                 
                 # === 3. PIVOT POINTS (all methods) ===
                 pivots = ctx.pivots  # Assuming this is available in context
+                t = pivots.traditional if pivots else None
+                f = pivots.fibonacci if pivots else None
+                c = pivots.camarilla if pivots else None
                 
+
                 # === 4. SMC DATA (complete) ===
                 smc_order_blocks = []
                 if ctx.smc:
@@ -322,20 +326,37 @@ class MarketAnalyzerService:
                 structure_last_high = getattr(ctx.structure, 'last_high', None)
                 structure_last_low = getattr(ctx.structure, 'last_low', None)
                 
-                # === 8. WARNINGS ===
-                warnings = []
-                for warning in ctx.warnings:
-                    warnings.append({
-                        "type": warning.type,
-                        "message": warning.message,
-                        "severity": warning.severity
-                    })
+                # === 8. CONFLUENCE ZONES ===
+                confluence_zones = []
+                if pivots:
+                    try:
+                        nearest_r = pivots.get_nearest_resistance(ctx.current_price)
+                        nearest_s = pivots.get_nearest_support(ctx.current_price)
+                        if nearest_r:
+                            confluence_zones.append({"type": "resistance", "data": nearest_r})
+                        if nearest_s:
+                            confluence_zones.append({"type": "support", "data": nearest_s})
+                    except:
+                        pass
+
+                json.dumps(confluence_zones),
+
+                # === 9. WARNINGS ===
+                warnings_text = self.generate_warnings(ctx)  # Generate warnings
+                if ctx.signal and ctx.signal.warnings:
+                    warnings_text.extend(ctx.signal.warnings)
+
+                # Deduplicate
+                warnings_text = list(dict.fromkeys(warnings_text))
+
+                # Store in database
+                warnings = warnings_text
                 
-                # === 9. ACTION RECOMMENDATION ===
+                # === 10. ACTION RECOMMENDATION ===
                 action = "WAIT"  # Default
                 if signal and signal.confidence > 60:
                     action = signal.direction
-                
+
                 # === INSERT QUERY ===
                 await conn.execute(
                     """
@@ -363,21 +384,24 @@ class MarketAnalyzerService:
                     )
                     """,
                     ctx.timestamp, to_python(ctx.current_price),
-                    signal.signal_type.value, signal.direction, to_python(signal.confidence),
+                    signal.signal_type.value if signal else None,
+                    signal.direction if signal else None,
+                    to_python(signal.confidence) if signal else None,
                     to_python(signal.setup.entry if signal.setup else None),
                     to_python(signal.setup.stop_loss if signal.setup else None),
                     to_python(signal.setup.take_profit_1 if signal.setup else None),
                     to_python(signal.setup.take_profit_2 if signal.setup else None),
                     to_python(signal.setup.take_profit_3 if signal.setup else None),
                     to_python(signal.setup.risk_reward_ratio if signal.setup else None),
-                    json.dumps(signal_factors), json.dumps(trends_json),
-                    to_python(pivots.pivot), to_python(pivots.r3_trad), to_python(pivots.r2_trad),
-                    to_python(pivots.r1_trad), to_python(pivots.s1_trad), to_python(pivots.s2_trad),
-                    to_python(pivots.s3_trad), to_python(pivots.r3_fib), to_python(pivots.r2_fib),
-                    to_python(pivots.r1_fib), to_python(pivots.s1_fib), to_python(pivots.s2_fib),
-                    to_python(pivots.s3_fib), to_python(pivots.r4_cam), to_python(pivots.r3_cam),
-                    to_python(pivots.s3_cam), to_python(pivots.s4_cam),
-                    json.dumps(pivots.confluence_zones), "ABOVE" if ctx.current_price > pivots.pivot else "BELOW",
+                    json.dumps(signal_factors),
+                    json.dumps(trends_json),
+                    to_python(t.pivot if t else None),
+                    to_python(t.r3 if t else None), to_python(t.r2 if t else None), to_python(t.r1 if t else None),
+                    to_python(t.s1 if t else None), to_python(t.s2 if t else None), to_python(t.s3 if t else None),
+                    to_python(f.r3 if f else None), to_python(f.r2 if f else None), to_python(f.r1 if f else None),
+                    to_python(f.s1 if f else None), to_python(f.s2 if f else None), to_python(f.s3 if f else None),
+                    to_python(c.r4 if c else None), to_python(c.r3 if c else None), to_python(c.s3 if c else None), to_python(c.s4 if c else None),
+                    json.dumps(pivots.confluence_zones), "ABOVE" if t and ctx.current_price > t.pivot else "BELOW",
                     ctx.smc.bias if ctx.smc else None,
                     self.get_price_zone(ctx),
                     to_python(ctx.smc.equilibrium if ctx.smc else None),
