@@ -256,12 +256,12 @@ class LLMAnalystService:
                     logger.info("")
                     logger.info("  Top Signal Factors:")
                     for factor in signal_factors[:5]:
-                        weight = factor.get('weight', 0)
+                        weight = int(factor.get('weight', 0))
                         desc = factor.get('description', 'Unknown')
                         symbol = "🟢" if weight > 0 else "🔴" if weight < 0 else "⚪"
                         logger.info(f"    {symbol} {weight:+3d} | {desc}")
             
-            # Log warnings
+            # Log warnings (stored as list of strings)
             warnings = market_analysis.get('warnings')
             if warnings:
                 if isinstance(warnings, str):
@@ -274,8 +274,12 @@ class LLMAnalystService:
                     logger.info("")
                     logger.info("  ⚠️ Active Warnings:")
                     for warning in warnings:
-                        msg = warning.get('message', warning.get('type', 'Unknown'))
-                        logger.info(f"    • {msg}")
+                        # Warnings are strings, not dicts
+                        if isinstance(warning, str):
+                            logger.info(f"    • {warning}")
+                        elif isinstance(warning, dict):
+                            msg = warning.get('message', warning.get('type', 'Unknown'))
+                            logger.info(f"    • {msg}")
             
             logger.info("")
         
