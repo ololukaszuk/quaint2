@@ -178,17 +178,21 @@ class MarketAnalyzerService:
     
     def detect_signal_change(self, ctx: MarketContext) -> bool:
         """Check if signal has changed from previous analysis."""
-        if not ctx.signal:
-            return False
+        if not ctx.signal or ctx.signal.direction == "NONE":
+            return False  # Ignore NEUTRAL signals entirely
         
         current_type = ctx.signal.signal_type.value
         current_direction = ctx.signal.direction
         
-        # Signal changed if type or direction changed
         if self.previous_signal_type is None:
             return True  # First signal
         
-        return (current_type != self.previous_signal_type or 
+        # Record if EITHER type or direction changed
+        # WEAK_BUY→BUY (same LONG) = recorded ✅
+        # BUY→STRONG_BUY (same LONG) = recorded ✅
+        # STRONG_BUY→LONG (direction stays) = recorded ✅
+        # WEAK_BUY→WEAK_BUY (identical) = NOT recorded ✅
+        return (current_type != self.previous_signal_type or
                 current_direction != self.previous_signal_direction)
     
     async def save_analysis(
@@ -468,9 +472,9 @@ class MarketAnalyzerService:
                     self.generate_summary(ctx), signal_changed, previous_type
                 )
 
-                # === INSERT INTO MARKET_SIGNALS (only when signal_changed=True) ===
-                if signal_changed and signal:
-                    logger.info(f"💾 Inserting new signal into market_signals: {signal.signal_type.value} ({signal.direction})")
+                # === INSERT INTO MARKET_SIGNALS ===
+                if signal_changed and signal and signal.direction != "NONE":
+                    logger.info(f"💾 Inserting new signal into market_signals: {signal.signal_type.value} ({signal.direction})")                    
                     
                     await conn.execute(
                         """
