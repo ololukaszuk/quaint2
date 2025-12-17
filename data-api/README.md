@@ -2,18 +2,18 @@
 
 Secure REST API for accessing BTC trading data from TimescaleDB with **API Key authentication** and HTTPS support.
 
-> **🆕 Enhanced Schema v2.0:** This API now supports the enhanced database schema that captures 100% of market-analyzer log data. See [Database Schema](#database-schema) section for migration details.
+> **ðŸ†• Enhanced Schema v2.0:** This API now supports the enhanced database schema that captures 100% of market-analyzer log data. See [Database Schema](#database-schema) section for migration details.
 
 ## Features
 
-- 🔐 **API Key authentication** - Bearer token protection
-- ✅ **HTTPS by default** with self-signed certificates
-- ✅ **Custom certificate support** via mounted volumes
-- ✅ **5 REST endpoints** for different data types
-- ✅ **Query parameters** for filtering and pagination
-- ✅ **CORS enabled** for web applications
-- ✅ **Health checks** for monitoring
-- ✅ **JSON responses** with proper error handling
+- ðŸ” **API Key authentication** - Bearer token protection
+- âœ… **HTTPS by default** with self-signed certificates
+- âœ… **Custom certificate support** via mounted volumes
+- âœ… **5 REST endpoints** for different data types
+- âœ… **Query parameters** for filtering and pagination
+- âœ… **CORS enabled** for web applications
+- âœ… **Health checks** for monitoring
+- âœ… **JSON responses** with proper error handling
 
 ## Quick Start
 
@@ -243,17 +243,18 @@ curl -k -H "Authorization: Bearer $API_KEY" \
 
 **GET** `/api/v1/llm-analysis`
 
-Get AI predictions and analysis from DeepSeek/Ollama.
+Get AI predictions and analysis from DeepSeek/Ollama. **Requires authentication.**
 
 **Query Parameters:**
 - `limit` (int, default: 50, max: 1000)
 
 **Example:**
 ```bash
-curl -k "https://localhost:8443/api/v1/llm-analysis?limit=20"
+curl -k -H "Authorization: Bearer $API_KEY" \
+  "https://localhost:8443/api/v1/llm-analysis?limit=20"
 ```
 
-**Response Fields:**
+**Response Fields (Original Schema v1.0):**
 ```json
 {
   "id": 24,
@@ -274,6 +275,91 @@ curl -k "https://localhost:8443/api/v1/llm-analysis?limit=20"
   "direction_correct_4h": null,
   "created_at": "2025-12-16T20:08:21.939582Z"
 }
+```
+
+**Response Fields (Enhanced Schema v2.0):**
+
+After applying the LLM analyst migration 002, the API returns complete market context:
+
+```json
+{
+  "id": 24,
+  "analysis_time": "2025-12-16T20:08:21.938424Z",
+  "price": "87584.01000000",
+  "prediction_direction": "BULLISH",
+  "prediction_confidence": "MEDIUM",
+  "predicted_price_1h": "87800.00",
+  "predicted_price_4h": "88200.00",
+  "key_levels": "S: $87,417 | R: $87,753",
+  "reasoning": "The bullish CHoCH suggests potential reversal...",
+  "full_response": "**BTCUSDT Price Prediction Analysis**...",
+  "model_name": "deepseek-r1:8b",
+  "response_time_seconds": 4.25,
+  
+  // 🆕 Enhanced fields (NEW in v2.0)
+  "invalidation_level": "87100.00",
+  "critical_support": "87100.00",
+  "critical_resistance": "87800.00",
+  
+  // 🆕 Market context at time of prediction
+  "market_context": {
+    "signal_type": "WEAK_BUY",
+    "signal_direction": "LONG",
+    "signal_confidence": 44.5,
+    "smc_bias": "BULLISH",
+    "price_zone": "DISCOUNT",
+    "action_recommendation": "WAIT",
+    "nearest_support": 87100,
+    "nearest_resistance": 87750
+  },
+  
+  // 🆕 Signal factors the LLM analyzed
+  "signal_factors_used": [
+    {"description": "Bullish CHoCH - potential trend reversal up", "weight": 30},
+    {"description": "At strong resistance $87,753 (0.22% away)", "weight": -30},
+    {"description": "4h trend: DOWNTREND (100% strength), EMA: BEARISH", "weight": -25}
+  ],
+  
+  // 🆕 SMC bias at analysis time
+  "smc_bias_at_analysis": "BULLISH",
+  
+  // 🆕 Trends at analysis time
+  "trends_at_analysis": {
+    "5m": {"direction": "UPTREND", "strength": 0.8},
+    "15m": {"direction": "UPTREND", "strength": 0.6},
+    "1h": {"direction": "SIDEWAYS", "strength": 0.3},
+    "4h": {"direction": "DOWNTREND", "strength": 1.0}
+  },
+  
+  // 🆕 Warnings at analysis time
+  "warnings_at_analysis": [
+    {"type": "CLOSE_TO_RESISTANCE", "message": "Near $87,750", "severity": "MEDIUM"}
+  ],
+  
+  // Accuracy tracking (filled after 1h/4h)
+  "actual_price_1h": "87820.00",
+  "actual_price_4h": null,
+  "direction_correct_1h": true,
+  "direction_correct_4h": null,
+  "created_at": "2025-12-16T20:08:21.939582Z"
+}
+```
+
+**Purpose of Enhanced Fields:**
+
+The market context fields store exactly what data the LLM saw when making its prediction. This enables:
+- Analysis of which market conditions lead to accurate predictions
+- Comparison of LLM prediction vs market-analyzer signal
+- Debugging why certain predictions failed
+- Training data for future model improvements
+
+**Migration Required:**
+
+To enable enhanced fields, apply the LLM analyst migration:
+```bash
+docker cp llm-analyst/migrations/002_llm_analyst_enhanced.sql btc-ml-timescaledb:/tmp/
+docker exec -it btc-ml-timescaledb psql -U mltrader -d btc_ml_production \
+  -f /tmp/002_llm_analyst_enhanced.sql
 ```
 
 ---
@@ -320,7 +406,7 @@ After upgrading to the enhanced schema, the API returns complete log data:
   "take_profit_3": null,
   "risk_reward_ratio": null,
   
-  // 🆕 Signal reasoning with weights (NEW in v2.0)
+  // ðŸ†• Signal reasoning with weights (NEW in v2.0)
   "signal_factors": [
     {
       "description": "At strong resistance $87,769 (0.03% away)",
@@ -356,7 +442,7 @@ After upgrading to the enhanced schema, the API returns complete log data:
     }
   },
   
-  // 🆕 Complete pivot data (NEW in v2.0)
+  // ðŸ†• Complete pivot data (NEW in v2.0)
   "pivot_daily": "87210.45333333",
   "pivot_r3_traditional": "94180.00",
   "pivot_r2_traditional": "92116.00",
@@ -385,7 +471,7 @@ After upgrading to the enhanced schema, the API returns complete log data:
   ],
   "price_vs_pivot": "ABOVE",
   
-  // 🆕 Complete SMC data (NEW in v2.0)
+  // ðŸ†• Complete SMC data (NEW in v2.0)
   "smc_bias": "BULLISH",
   "smc_price_zone": "DISCOUNT",
   "smc_equilibrium": "87599.64000000",
@@ -418,7 +504,7 @@ After upgrading to the enhanced schema, the API returns complete log data:
     "sell_side": [87607, 87537, 87338]
   },
   
-  // 🆕 All support/resistance levels (NEW in v2.0)
+  // ðŸ†• All support/resistance levels (NEW in v2.0)
   "support_levels": [
     {
       "price": 87556,
@@ -445,7 +531,7 @@ After upgrading to the enhanced schema, the API returns complete log data:
     }
   ],
   
-  // 🆕 Momentum for all timeframes (NEW in v2.0)
+  // ðŸ†• Momentum for all timeframes (NEW in v2.0)
   "momentum": {
     "5m": {
       "rsi": 52.1,
@@ -474,12 +560,12 @@ After upgrading to the enhanced schema, the API returns complete log data:
     }
   },
   
-  // 🆕 Market structure (NEW in v2.0)
+  // ðŸ†• Market structure (NEW in v2.0)
   "structure_pattern": "CONTRACTING",
   "structure_last_high": "88175.98",
   "structure_last_low": "86107.43",
   
-  // 🆕 Warnings and alerts (NEW in v2.0)
+  // ðŸ†• Warnings and alerts (NEW in v2.0)
   "warnings": [
     {
       "type": "CLOSE_TO_SUPPORT",
@@ -502,7 +588,7 @@ After upgrading to the enhanced schema, the API returns complete log data:
 }
 ```
 
-**Note:** Fields marked with 🆕 are available after applying the enhanced schema migration. See the [Database Schema](#database-schema) section below for migration instructions.
+**Note:** Fields marked with ðŸ†• are available after applying the enhanced schema migration. See the [Database Schema](#database-schema) section below for migration instructions.
 
 ---
 
@@ -539,7 +625,7 @@ curl -k "https://localhost:8443/api/v1/market-signals?limit=50"
   "previous_direction": "NONE",
   "summary": "BTC $87,560 - WEAK_BUY (41% confidence)...",
   
-  // 🆕 Enhanced key_reasons with weights (JSONB in v2.0)
+  // ðŸ†• Enhanced key_reasons with weights (JSONB in v2.0)
   "key_reasons": [
     {
       "description": "At strong resistance $87,753 (0.22% away)",
@@ -574,7 +660,7 @@ curl -k https://localhost:8443/api/v1/health
 ```
 
 **Browser Warning:**
-Browsers will show a security warning. Click "Advanced" → "Proceed to localhost".
+Browsers will show a security warning. Click "Advanced" â†’ "Proceed to localhost".
 
 ---
 
@@ -583,9 +669,9 @@ Browsers will show a security warning. Click "Advanced" → "Proceed to localhos
 **1. Place your certificate files:**
 ```
 project_root/
-├── certs/
-│   ├── server.crt  # Your SSL certificate
-│   └── server.key  # Your private key
+â”œâ”€â”€ certs/
+â”‚   â”œâ”€â”€ server.crt  # Your SSL certificate
+â”‚   â””â”€â”€ server.key  # Your private key
 ```
 
 **2. Update `.env`:**
@@ -796,13 +882,13 @@ docker-compose logs --tail=100 data-api
 
 **Solution:**
 ```bash
-# ❌ Wrong - no auth header
+# âŒ Wrong - no auth header
 curl -k https://localhost:8443/api/v1/candles
 
-# ❌ Wrong - missing "Bearer " prefix
+# âŒ Wrong - missing "Bearer " prefix
 curl -k -H "Authorization: your_key" https://localhost:8443/api/v1/candles
 
-# ✅ Correct
+# âœ… Correct
 curl -k -H "Authorization: Bearer your_key" https://localhost:8443/api/v1/candles
 ```
 
@@ -961,20 +1047,20 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO mltrader;
 ### API Key Security Best Practices
 
 ```bash
-# ✅ DO: Use environment variables
+# âœ… DO: Use environment variables
 export DATA_API_KEY="$(openssl rand -base64 32)"
 docker-compose up data-api
 
-# ✅ DO: Use secrets management
+# âœ… DO: Use secrets management
 aws secretsmanager get-secret-value --secret-id data-api-key
 
-# ❌ DON'T: Hardcode in scripts
+# âŒ DON'T: Hardcode in scripts
 curl -H "Authorization: Bearer hardcoded_key_123"  # BAD!
 
-# ❌ DON'T: Commit to git
+# âŒ DON'T: Commit to git
 git add .env  # BAD! Use .env.example instead
 
-# ❌ DON'T: Share in chat/email
+# âŒ DON'T: Share in chat/email
 # Use secure channels for key distribution
 ```
 
@@ -1063,6 +1149,8 @@ git add .env  # BAD! Use .env.example instead
 - ✅ Warnings and risk alerts
 - ✅ Weighted signal factors (matching log bar charts)
 - ✅ Enhanced key_reasons with weights (JSONB)
+- ✅ **LLM market context storage** (what the LLM saw when predicting)
+- ✅ **LLM accuracy analysis by market conditions**
 
 ### Migration to v2.0
 
@@ -1072,26 +1160,32 @@ To upgrade your database to the enhanced schema:
 # 1. Backup your database first!
 docker exec btc-ml-timescaledb pg_dump -U mltrader -d btc_ml_production > backup.sql
 
-# 2. Copy migration script
-docker cp migrations/migrate_to_enhanced_schema.sql btc-ml-timescaledb:/tmp/
-
-# 3. Apply migration
+# 2. Apply market-analyzer enhanced schema
+docker cp market-analyzer/migrations/002_enhanced_schema.sql btc-ml-timescaledb:/tmp/
 docker exec -it btc-ml-timescaledb psql -U mltrader -d btc_ml_production \
-  -f /tmp/migrate_to_enhanced_schema.sql
+  -f /tmp/002_enhanced_schema.sql
+
+# 3. Apply LLM analyst enhanced schema (NEW)
+docker cp llm-analyst/migrations/002_llm_analyst_enhanced.sql btc-ml-timescaledb:/tmp/
+docker exec -it btc-ml-timescaledb psql -U mltrader -d btc_ml_production \
+  -f /tmp/002_llm_analyst_enhanced.sql
 
 # 4. Verify migration
 docker exec -it btc-ml-timescaledb psql -U mltrader -d btc_ml_production \
-  -c "\d market_analysis"
+  -c "\d market_analysis" | grep signal_factors
+docker exec -it btc-ml-timescaledb psql -U mltrader -d btc_ml_production \
+  -c "\d llm_analysis" | grep market_context
 
-# 5. Update Go structs in main.go (see migration guide)
-
-# 6. Rebuild and restart
-docker-compose build data-api
-docker-compose restart data-api
+# 5. Rebuild and restart
+docker-compose build data-api llm-analyst
+docker-compose restart data-api llm-analyst
 ```
 
 **Files Needed:**
-- `migrations/migrate_to_enhanced_schema.sql` - Main migration script
+- `market-analyzer/migrations/002_enhanced_schema.sql` - Market analysis enhancement
+- `llm-analyst/migrations/002_llm_analyst_enhanced.sql` - LLM analysis enhancement (NEW)
+- `migrations/MIGRATION_GUIDE.md` - Detailed instructions with code examples
+- `migrations/LOG_TO_DATABASE_MAPPING.md` - Complete field mapping reference
 - `migrations/MIGRATION_GUIDE.md` - Detailed instructions with code examples
 - `migrations/LOG_TO_DATABASE_MAPPING.md` - Complete field mapping reference
 
