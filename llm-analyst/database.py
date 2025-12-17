@@ -115,15 +115,15 @@ class Database:
             return [dict(row) for row in reversed(rows)]
     
     async def get_latest_market_analysis(self) -> Optional[Dict[str, Any]]:
-        """Get the most recent market analysis from market-analyzer."""
+        """Get the most recent market analysis with ALL enriched data."""
         if not self.pool:
             return None
-        
+
         try:
             async with self.pool.acquire() as conn:
                 row = await conn.fetchrow(
                     """
-                    SELECT 
+                    SELECT
                         analysis_time,
                         price,
                         signal_type,
@@ -147,7 +147,33 @@ class Database:
                         price_vs_pivot,
                         rsi_1h,
                         volume_ratio_1h,
-                        summary
+                        summary,
+                        signal_factors,
+                        support_levels,
+                        resistance_levels,
+                        momentum,
+                        pivot_daily,
+                        pivot_r1_traditional,
+                        pivot_r2_traditional,
+                        pivot_r3_traditional,
+                        pivot_s1_traditional,
+                        pivot_s2_traditional,
+                        pivot_s3_traditional,
+                        pivot_r1_fibonacci,
+                        pivot_r2_fibonacci,
+                        pivot_r3_fibonacci,
+                        pivot_s1_fibonacci,
+                        pivot_s2_fibonacci,
+                        pivot_s3_fibonacci,
+                        pivot_r4_camarilla,
+                        pivot_r3_camarilla,
+                        pivot_s3_camarilla,
+                        pivot_s4_camarilla,
+                        pivot_confluence_zones,
+                        smc_order_blocks,
+                        smc_fvgs,
+                        smc_breaks,
+                        smc_liquidity
                     FROM market_analysis
                     ORDER BY analysis_time DESC
                     LIMIT 1
@@ -155,7 +181,7 @@ class Database:
                 )
                 return dict(row) if row else None
         except Exception as e:
-            logger.warning(f"Could not fetch market analysis (table may not exist): {e}")
+            logger.warning(f"Could not fetch market analysis: {e}")
             return None
     
     async def get_signal_history(self, limit: int = 15) -> List[Dict[str, Any]]:
