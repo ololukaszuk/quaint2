@@ -148,7 +148,12 @@ class SignalGenerator:
         momentum_score, momentum_reasons = self._analyze_momentum(context.momentum)
         reasons.extend(momentum_reasons)
         
-        # ===== 3. SUPPORT/RESISTANCE =====
+        # ===== 3. PRICE ACTION CHECK =====
+        price_action_score, price_action_reason = self._analyze_price_action(context)
+        if price_action_reason:
+            reasons.append(price_action_reason)
+        
+        # ===== 4. SUPPORT/RESISTANCE =====
         level_score, level_reasons, level_warnings = self._analyze_levels(
             current_price,
             context.support_levels,
@@ -157,14 +162,14 @@ class SignalGenerator:
         reasons.extend(level_reasons)
         warnings.extend(level_warnings)
         
-        # ===== 4. PIVOT POINTS =====
+        # ===== 5. PIVOT POINTS =====
         if pivots:
             pivot_score, pivot_reasons = self._analyze_pivots(current_price, pivots)
             reasons.extend(pivot_reasons)
         else:
             pivot_score = 0
         
-        # ===== 5. SMART MONEY CONCEPTS =====
+        # ===== 6. SMART MONEY CONCEPTS =====
         if smc:
             smc_score, smc_reasons, smc_warnings = self._analyze_smc(current_price, smc)
             reasons.extend(smc_reasons)
@@ -175,16 +180,17 @@ class SignalGenerator:
         
         # ===== CALCULATE FINAL SCORE =====
         final_score = (
-            trend_score * 0.35 +
-            momentum_score * 0.25 +
+            trend_score * 0.30 +        # Slightly reduced to make room for price action
+            momentum_score * 0.20 +     # Slightly reduced
+            price_action_score * 0.15 + # NEW: Price action weight
             level_score * 0.15 +
-            pivot_score * 0.10 +
+            pivot_score * 0.05 +
             structure_score * 0.15
         )
         
         # ===== DETERMINE SIGNAL TYPE =====
         signal_type, direction, confidence = self._determine_signal(
-            final_score, trend_score, momentum_score, warnings
+            final_score, trend_score, momentum_score, price_action_score, warnings
         )
         
         # ===== GENERATE TRADE SETUP =====
@@ -368,6 +374,53 @@ class SignalGenerator:
                 score = score * 0.8
         
         return np.clip(score, -1.0, 1.0), reasons
+    
+    def _analyze_price_action(self, context: MarketContext) -> Tuple[float, Optional[SignalReason]]:
+        """
+        Check if price is actually moving in the expected direction.
+        This prevents giving bullish signals when price is clearly falling.
+        """
+        score = 0.0
+        reason = None
+        
+        # Get 5m candles to check recent price action
+        if "5m" not in context.candle_data:
+            return 0.0, None
+        
+        candles_5m = context.candle_data["5m"]
+        
+        if len(candles_5m) < 12:
+            return 0.0, None
+        
+        # Check last hour of 5m candles (12 candles)
+        last_hour_5m = candles_5m[-12:]
+        price_change_1h = (last_hour_5m.close[-1] - last_hour_5m.close[0]) / last_hour_5m.close[0]
+        
+        # Count green vs red candles in last hour
+        green_candles_5m = sum(1 for i in range(len(last_hour_5m)) if last_hour_5m.close[i] > last_hour_5m.open[i])
+        red_candles_5m = sum(1 for i in range(len(last_hour_5m)) if last_hour_5m.close[i] < last_hour_5m.open[i])
+        
+        # Determine price action bias
+        if price_change_1h > 0.002:  # More than 0.2% up in last hour
+            if green_candles_5m > red_candles_5m + 2:  # Clear bullish candles
+                score = 0.5
+                reason = SignalReason(
+                    factor="price_action",
+                    direction="BULLISH",
+                    weight=0.5,
+                    description=f"Price rising (+{price_change_1h*100:.2f}% last hour, {green_candles_5m}/12 green candles)"
+                )
+        elif price_change_1h < -0.002:  # More than 0.2% down in last hour
+            if red_candles_5m > green_candles_5m + 2:  # Clear bearish candles
+                score = -0.5
+                reason = SignalReason(
+                    factor="price_action",
+                    direction="BEARISH",
+                    weight=-0.5,
+                    description=f"Price falling ({price_change_1h*100:.2f}% last hour, {red_candles_5m}/12 red candles)"
+                )
+        
+        return score, reason
     
     def _analyze_levels(
         self,
@@ -613,39 +666,56 @@ class SignalGenerator:
         final_score: float,
         trend_score: float,
         momentum_score: float,
+        price_action_score: float,
         warnings: List[str],
     ) -> Tuple[SignalType, str, float]:
-        """Determine signal type, direction, and confidence."""
+        """Determine signal type, direction, and confidence with STRICTER thresholds."""
         
-        # Score thresholds
-        if final_score >= 0.6:
+        # FIXED: Stricter score thresholds to reduce false signals
+        if final_score >= 0.5:  # Was 0.6 - Strong buy needs 0.5+
             signal_type = SignalType.STRONG_BUY
             direction = "LONG"
-            base_confidence = 80 + (final_score - 0.6) * 50
-        elif final_score >= 0.35:
+            base_confidence = 75 + (final_score - 0.5) * 50
+        elif final_score >= 0.3:  # Was 0.35 - Buy needs 0.3+
             signal_type = SignalType.BUY
             direction = "LONG"
-            base_confidence = 65 + (final_score - 0.35) * 60
-        elif final_score >= 0.15:
+            base_confidence = 65 + (final_score - 0.3) * 50
+        elif final_score >= 0.2:  # CRITICAL FIX: Was 0.15 - Weak buy needs 0.2+
             signal_type = SignalType.WEAK_BUY
             direction = "LONG"
-            base_confidence = 50 + (final_score - 0.15) * 75
-        elif final_score <= -0.6:
+            base_confidence = 50 + (final_score - 0.2) * 75
+        elif final_score <= -0.5:  # Was -0.6
             signal_type = SignalType.STRONG_SELL
             direction = "SHORT"
-            base_confidence = 80 + (abs(final_score) - 0.6) * 50
-        elif final_score <= -0.35:
+            base_confidence = 75 + (abs(final_score) - 0.5) * 50
+        elif final_score <= -0.3:  # Was -0.35
             signal_type = SignalType.SELL
             direction = "SHORT"
-            base_confidence = 65 + (abs(final_score) - 0.35) * 60
-        elif final_score <= -0.15:
+            base_confidence = 65 + (abs(final_score) - 0.3) * 50
+        elif final_score <= -0.2:  # CRITICAL FIX: Was -0.15 - Weak sell needs -0.2 or lower
             signal_type = SignalType.WEAK_SELL
             direction = "SHORT"
-            base_confidence = 50 + (abs(final_score) - 0.15) * 75
+            base_confidence = 50 + (abs(final_score) - 0.2) * 75
         else:
+            # NEUTRAL zone is now -0.2 to 0.2 (was -0.15 to 0.15) - 33% wider
             signal_type = SignalType.NEUTRAL
             direction = "NONE"
             base_confidence = 0
+        
+        # NEW: Verify price action matches signal direction
+        if direction == "LONG" and price_action_score < -0.2:
+            # Trying to go long but price is falling - reduce confidence significantly
+            base_confidence -= 20
+            if base_confidence < 40:
+                # Cancel the signal if confidence too low
+                signal_type = SignalType.NEUTRAL
+                direction = "NONE"
+        elif direction == "SHORT" and price_action_score > 0.2:
+            # Trying to go short but price is rising - reduce confidence
+            base_confidence -= 20
+            if base_confidence < 40:
+                signal_type = SignalType.NEUTRAL
+                direction = "NONE"
         
         # Adjust confidence based on trend alignment
         if direction == "LONG" and trend_score > 0.3:

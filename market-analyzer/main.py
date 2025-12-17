@@ -473,8 +473,31 @@ class MarketAnalyzerService:
                 )
 
                 # === INSERT INTO MARKET_SIGNALS ===
-                if signal_changed and signal and signal.direction != "NONE":
-                    logger.info(f"💾 Inserting new signal into market_signals: {signal.signal_type.value} ({signal.direction})")                    
+                # Only insert when signal TYPE or DIRECTION actually changes
+                # This prevents duplicate entries for same signal with minor confidence fluctuations
+                should_insert = False
+                if signal and signal.direction != "NONE":
+                    current_type = signal.signal_type.value
+                    current_direction = signal.direction
+                    
+                    # Insert if this is a new type or direction change
+                    type_changed = (previous_type != current_type)
+                    direction_changed = (previous_direction != current_direction)
+                    
+                    should_insert = type_changed or direction_changed
+                    
+                    if should_insert:
+                        logger.info(
+                            f"💾 Signal change detected - Inserting into market_signals: "
+                            f"{previous_type}({previous_direction}) → {current_type}({current_direction})"
+                        )
+                    else:
+                        logger.debug(
+                            f"⏭️  Signal unchanged ({current_type} {current_direction}) - "
+                            f"Skipping market_signals insert"
+                        )
+                
+                if should_insert:
                     
                     await conn.execute(
                         """
