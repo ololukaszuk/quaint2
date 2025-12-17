@@ -364,56 +364,110 @@ class MarketAnalyzerService:
                         analysis_time, price, signal_type, signal_direction, signal_confidence,
                         entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3, risk_reward_ratio,
                         signal_factors, trends,
+                        nearest_support, nearest_resistance, support_strength, resistance_strength,
                         pivot_daily, pivot_r3_traditional, pivot_r2_traditional, pivot_r1_traditional,
                         pivot_s1_traditional, pivot_s2_traditional, pivot_s3_traditional,
                         pivot_r3_fibonacci, pivot_r2_fibonacci, pivot_r1_fibonacci,
                         pivot_s1_fibonacci, pivot_s2_fibonacci, pivot_s3_fibonacci,
                         pivot_r4_camarilla, pivot_r3_camarilla, pivot_s3_camarilla, pivot_s4_camarilla,
                         pivot_confluence_zones, price_vs_pivot,
-                        smc_bias, smc_price_zone, smc_equilibrium,
+                        smc_bias, price_zone, smc_price_zone, smc_equilibrium,
                         smc_order_blocks, smc_fvgs, smc_breaks, smc_liquidity,
                         support_levels, resistance_levels, momentum,
+                        rsi_1h, volume_ratio_1h,
+                        daily_pivot, equilibrium_price,
                         structure_pattern, structure_last_high, structure_last_low,
                         warnings, action_recommendation,
                         summary, signal_changed, previous_signal
                     ) VALUES (
                         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
-                        $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39,
-                        $40, $41, $42, $43, $44, $45, $46, $47
+                        $14, $15, $16, $17,
+                        $18, $19, $20, $21, $22, $23, $24,
+                        $25, $26, $27, $28, $29, $30,
+                        $31, $32, $33, $34,
+                        $35, $36,
+                        $37, $38, $39, $40,
+                        $41, $42, $43, $44,
+                        $45, $46, $47,
+                        $48, $49,
+                        $50, $51,
+                        $52, $53, $54,
+                        $55, $56,
+                        $57, $58, $59
                     )
                     """,
+                    # $1-$5: Basic price & signal
                     ctx.timestamp, to_python(ctx.current_price),
                     signal.signal_type.value if signal else None,
                     signal.direction if signal else None,
                     to_python(signal.confidence) if signal else None,
-                    to_python(signal.setup.entry if signal.setup else None),
-                    to_python(signal.setup.stop_loss if signal.setup else None),
-                    to_python(signal.setup.take_profit_1 if signal.setup else None),
-                    to_python(signal.setup.take_profit_2 if signal.setup else None),
-                    to_python(signal.setup.take_profit_3 if signal.setup else None),
-                    to_python(signal.setup.risk_reward_ratio if signal.setup else None),
+                    
+                    # $6-$11: Trade setup
+                    to_python(signal.setup.entry if signal and signal.setup else None),
+                    to_python(signal.setup.stop_loss if signal and signal.setup else None),
+                    to_python(signal.setup.take_profit_1 if signal and signal.setup else None),
+                    to_python(signal.setup.take_profit_2 if signal and signal.setup else None),
+                    to_python(signal.setup.take_profit_3 if signal and signal.setup else None),
+                    to_python(signal.setup.risk_reward_ratio if signal and signal.setup else None),
+                    
+                    # $12-$13: Signal & trends
                     json.dumps(signal_factors),
                     json.dumps(trends_json),
+                    
+                    # $14-$17: Nearest support/resistance (from support_levels[0] & resistance_levels[0])
+                    float(support_levels[0]['price']) if support_levels else None,  # $14 nearest_support
+                    float(resistance_levels[0]['price']) if resistance_levels else None,  # $15 nearest_resistance
+                    support_levels[0]['strength'] if support_levels else None,  # $16 support_strength
+                    resistance_levels[0]['strength'] if resistance_levels else None,  # $17 resistance_strength
+                    
+                    # $18-$30: Pivot points (traditional)
                     to_python(t.pivot if t else None),
                     to_python(t.r3 if t else None), to_python(t.r2 if t else None), to_python(t.r1 if t else None),
                     to_python(t.s1 if t else None), to_python(t.s2 if t else None), to_python(t.s3 if t else None),
+                    
+                    # $25-$30: Pivot points (fibonacci)
                     to_python(f.r3 if f else None), to_python(f.r2 if f else None), to_python(f.r1 if f else None),
                     to_python(f.s1 if f else None), to_python(f.s2 if f else None), to_python(f.s3 if f else None),
+                    
+                    # $31-$34: Pivot points (camarilla)
                     to_python(c.r4 if c else None), to_python(c.r3 if c else None), to_python(c.s3 if c else None), to_python(c.s4 if c else None),
-                    json.dumps(confluence_zones), "ABOVE" if t and ctx.current_price > t.pivot else "BELOW",
+                    
+                    # $35-$36: Confluence zones & price vs pivot
+                    json.dumps(confluence_zones),
+                    "ABOVE" if t and ctx.current_price > t.pivot else "BELOW",
+                    
+                    # $37-$40: SMC bias & zones
                     ctx.smc.current_bias if ctx.smc else None,
-                    self.get_price_zone(ctx),
+                    self.get_price_zone(ctx),  # $38 price_zone (old schema)
+                    self.get_price_zone(ctx),  # $39 smc_price_zone (new schema, same value)
                     to_python(ctx.smc.equilibrium if ctx.smc else None),
+                    
+                    # $41-$44: SMC data
                     json.dumps(smc_order_blocks), json.dumps(smc_fvgs),
                     json.dumps(smc_breaks), json.dumps(smc_liquidity),
+                    
+                    # $45-$47: Levels & momentum
                     json.dumps(support_levels), json.dumps(resistance_levels),
                     json.dumps(momentum),
+                    
+                    # $48-$49: Momentum indicators (1H)
+                    ctx.momentum.get('1h').rsi if ctx.momentum.get('1h') else None,
+                    ctx.momentum.get('1h').volume_ratio if ctx.momentum.get('1h') else None,
+                    
+                    # $50-$51: Pivot duplicates (old schema)
+                    to_python(t.pivot if t else None),  # $50 daily_pivot
+                    to_python(ctx.smc.equilibrium if ctx.smc else None),  # $51 equilibrium_price
+                    
+                    # $52-$54: Market structure
                     structure_pattern, to_python(structure_last_high), to_python(structure_last_low),
+                    
+                    # $55-$56: Warnings & action
                     json.dumps(warnings), action,
+                    
+                    # $57-$59: Summary & metadata
                     self.generate_summary(ctx), signal_changed, previous_type
                 )
-                
+                                
         except Exception as e:
             logger.error(f"Error saving analysis: {e}")
         
