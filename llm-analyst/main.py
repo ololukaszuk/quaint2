@@ -256,10 +256,11 @@ class LLMAnalystService:
                     logger.info("")
                     logger.info("  Top Signal Factors:")
                     for factor in signal_factors[:5]:
-                        weight = int(factor.get('weight', 0))
+                        weight = factor.get('weight', 0)
                         desc = factor.get('description', 'Unknown')
                         symbol = "🟢" if weight > 0 else "🔴" if weight < 0 else "⚪"
-                        logger.info(f"    {symbol} {weight:+3d} | {desc}")
+                        weight_pct = f"{weight*100:+.1f}%"
+                        logger.info(f"    {symbol} {weight_pct:>7s} | {desc}")
             
             # Log warnings (stored as list of strings)
             warnings = market_analysis.get('warnings')
