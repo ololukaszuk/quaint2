@@ -92,7 +92,7 @@ def format_signal_factors(factors: Optional[List[Dict[str, Any]]]) -> str:
     bearish_total = 0
     
     for factor in sorted_factors[:10]:  # Top 10 factors
-        weight = factor.get('weight', 0)
+        weight = int(factor.get('weight', 0))  # Convert to int for formatting
         desc = factor.get('description', 'Unknown')
         
         if weight > 0:
@@ -107,8 +107,9 @@ def format_signal_factors(factors: Optional[List[Dict[str, Any]]]) -> str:
         lines.append(f"  {symbol} {weight:+3d} | {desc}")
     
     lines.append("")
-    lines.append(f"Bullish weight: +{bullish_total} | Bearish weight: -{bearish_total}")
-    lines.append(f"Net bias: {'BULLISH' if bullish_total > bearish_total else 'BEARISH' if bearish_total > bullish_total else 'NEUTRAL'} ({bullish_total - bearish_total:+d})")
+    lines.append(f"Bullish weight: +{int(bullish_total)} | Bearish weight: -{int(bearish_total)}")
+    net_bias = int(bullish_total - bearish_total)
+    lines.append(f"Net bias: {'BULLISH' if bullish_total > bearish_total else 'BEARISH' if bearish_total > bullish_total else 'NEUTRAL'} ({net_bias:+d})")
     
     return "\n".join(lines)
 

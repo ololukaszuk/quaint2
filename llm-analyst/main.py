@@ -81,7 +81,12 @@ class LLMAnalystService:
         models = await self.ollama.list_models()
         logger.info(f"Available models: {', '.join(models) if models else 'unknown'}")
         
-        if self.config.ollama_model not in [m.split(':')[0] for m in models]:
+        # Check if configured model is available
+        model_base = self.config.ollama_model.split(':')[0]
+        available_bases = [m.split(':')[0] for m in models]
+        model_available = self.config.ollama_model in models or model_base in available_bases
+        
+        if not model_available:
             logger.warning(f"Model {self.config.ollama_model} may not be available")
         
         # Get initial candle time
