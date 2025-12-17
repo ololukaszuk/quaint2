@@ -8,12 +8,24 @@ Saves LLM analysis with full logging details.
 import asyncio
 import json
 from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 from typing import Optional, List, Dict, Any
 
 import asyncpg
 from loguru import logger
 
 from config import Config
+
+
+def convert_decimals(obj: Any) -> Any:
+    """Recursively convert Decimal objects to floats for JSON serialization."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_decimals(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_decimals(item) for item in obj]
+    return obj
 
 
 class Database:
@@ -406,11 +418,11 @@ class Database:
                         predicted_price_1h, predicted_price_4h, key_levels, reasoning,
                         full_response, model_name, response_time_seconds,
                         invalidation_level, critical_support, critical_resistance,
-                        json.dumps(market_context) if market_context else None,
-                        json.dumps(signal_factors_used) if signal_factors_used else None,
+                        json.dumps(convert_decimals(market_context)) if market_context else None,
+                        json.dumps(convert_decimals(signal_factors_used)) if signal_factors_used else None,
                         smc_bias_at_analysis,
-                        json.dumps(trends_at_analysis) if trends_at_analysis else None,
-                        json.dumps(warnings_at_analysis) if warnings_at_analysis else None
+                        json.dumps(convert_decimals(trends_at_analysis)) if trends_at_analysis else None,
+                        json.dumps(convert_decimals(warnings_at_analysis)) if warnings_at_analysis else None
                     )
                 else:
                     # Fall back to original schema
