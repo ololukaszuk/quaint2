@@ -3,17 +3,23 @@
 LLM Market Analyst Service
 
 Uses DeepSeek (or other Ollama models) to provide AI-powered market commentary
-based on candle data and market-analyzer output.
+based on candle data and enhanced market-analyzer output.
+
+Now includes:
+- Full utilization of enhanced market_analysis schema (pivots, SMC, signals, etc.)
+- Enhanced logging with all analysis details
+- Saving market context to database for analysis
 
 Runs every 5 closed 1m candles (configurable).
 """
 
 import asyncio
+import json
 import signal
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
 from loguru import logger
 
@@ -35,7 +41,7 @@ logger.add(
 
 
 class LLMAnalystService:
-    """Main service that orchestrates LLM market analysis."""
+    """Main service that orchestrates LLM market analysis with enhanced data."""
     
     def __init__(self):
         self.config = Config()
@@ -50,11 +56,12 @@ class LLMAnalystService:
     async def start(self):
         """Initialize and start the service."""
         logger.info("=" * 70)
-        logger.info("🤖 LLM MARKET ANALYST SERVICE STARTING")
+        logger.info("🤖 LLM MARKET ANALYST SERVICE STARTING (Enhanced)")
         logger.info("=" * 70)
         logger.info(f"Model: {self.config.ollama_model}")
         logger.info(f"Ollama URL: {self.config.ollama_base_url}")
         logger.info(f"Analysis interval: Every {self.config.analysis_interval_candles} candles")
+        logger.info("Features: Enhanced market data, SMC, Pivots, Signal Factors")
         logger.info("")
         
         # Connect to database
@@ -123,7 +130,7 @@ class LLMAnalystService:
             await self.run_analysis()
     
     async def run_analysis(self):
-        """Run full LLM analysis and log results."""
+        """Run full LLM analysis with enhanced data and detailed logging."""
         if not self.ollama or not self.db:
             return
         
@@ -131,7 +138,7 @@ class LLMAnalystService:
         
         try:
             # Gather data
-            logger.debug("Fetching market data...")
+            logger.debug("Fetching market data (enhanced)...")
             
             candles_1h = await self.db.get_candles_1h(limit=self.config.candles_1h_lookback)
             candles_15m = await self.db.get_candles_15m(limit=self.config.candles_15m_lookback)
@@ -139,6 +146,12 @@ class LLMAnalystService:
             signal_history = await self.db.get_signal_history(limit=self.config.signal_history_count)
             
             logger.debug(f"Data: {len(candles_1h)} 1H candles, {len(candles_15m)} 15M candles, {len(signal_history)} signals")
+            
+            if market_analysis:
+                # Log enhanced data availability
+                enhanced_fields = ['signal_factors', 'smc_order_blocks', 'pivot_confluence_zones', 'warnings']
+                available = [f for f in enhanced_fields if market_analysis.get(f)]
+                logger.debug(f"Enhanced fields available: {', '.join(available) if available else 'none'}")
             
             # Get current price
             if candles_1h:
@@ -149,7 +162,7 @@ class LLMAnalystService:
                 logger.warning("No price data available")
                 return
             
-            # Build prompt
+            # Build prompt with enhanced data
             prompt = build_analysis_prompt(
                 candles_1h=candles_1h,
                 candles_15m=candles_15m,
@@ -179,22 +192,16 @@ class LLMAnalystService:
             
             elapsed = time.time() - start_time
             
-            # Log the analysis
-            self.log_analysis(parsed, response, current_price, elapsed)
+            # Log the analysis (enhanced)
+            self.log_analysis(parsed, response, current_price, elapsed, market_analysis)
             
-            # Save to database
-            await self.db.save_llm_analysis(
-                analysis_time=datetime.now(timezone.utc),
-                price=current_price,
-                prediction_direction=parsed.direction,
-                prediction_confidence=parsed.confidence,
-                predicted_price_1h=parsed.price_1h,
-                predicted_price_4h=parsed.price_4h,
-                key_levels=f"S: ${parsed.critical_support:,.0f} | R: ${parsed.critical_resistance:,.0f}" if parsed.critical_support and parsed.critical_resistance else "",
-                reasoning=parsed.reasoning,
-                full_response=response.content,
-                model_name=response.model,
-                response_time_seconds=elapsed,
+            # Save to database with enhanced context
+            await self.save_analysis_to_db(
+                parsed=parsed,
+                response=response,
+                current_price=current_price,
+                elapsed=elapsed,
+                market_analysis=market_analysis,
             )
             
         except Exception as e:
@@ -207,9 +214,10 @@ class LLMAnalystService:
         parsed: ParsedAnalysis,
         response: LLMResponse,
         current_price: float,
-        elapsed: float
+        elapsed: float,
+        market_analysis: Optional[Dict[str, Any]] = None
     ):
-        """Log LLM analysis in a readable format."""
+        """Log LLM analysis with enhanced market context."""
         logger.info("")
         logger.info("=" * 80)
         logger.info(f"🤖 LLM MARKET ANALYSIS - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
@@ -217,20 +225,69 @@ class LLMAnalystService:
         logger.info(f"Model: {response.model} | Response time: {elapsed:.1f}s | Tokens: {response.eval_count}")
         logger.info("")
         
+        # Market context from enhanced data
+        if market_analysis:
+            logger.info("📈 MARKET CONTEXT (from market-analyzer):")
+            logger.info("-" * 60)
+            logger.info(f"  Signal: {market_analysis.get('signal_type', 'N/A')} ({market_analysis.get('signal_direction', 'N/A')})")
+            logger.info(f"  Confidence: {market_analysis.get('signal_confidence', 0):.0f}%")
+            
+            if market_analysis.get('smc_bias'):
+                logger.info(f"  SMC Bias: {market_analysis['smc_bias']}")
+            
+            if market_analysis.get('action_recommendation'):
+                logger.info(f"  Action: {market_analysis['action_recommendation']}")
+            
+            # Log top signal factors
+            signal_factors = market_analysis.get('signal_factors')
+            if signal_factors:
+                if isinstance(signal_factors, str):
+                    try:
+                        signal_factors = json.loads(signal_factors)
+                    except:
+                        signal_factors = None
+                
+                if signal_factors and isinstance(signal_factors, list):
+                    logger.info("")
+                    logger.info("  Top Signal Factors:")
+                    for factor in signal_factors[:5]:
+                        weight = factor.get('weight', 0)
+                        desc = factor.get('description', 'Unknown')
+                        symbol = "🟢" if weight > 0 else "🔴" if weight < 0 else "⚪"
+                        logger.info(f"    {symbol} {weight:+3d} | {desc}")
+            
+            # Log warnings
+            warnings = market_analysis.get('warnings')
+            if warnings:
+                if isinstance(warnings, str):
+                    try:
+                        warnings = json.loads(warnings)
+                    except:
+                        warnings = None
+                
+                if warnings and isinstance(warnings, list):
+                    logger.info("")
+                    logger.info("  ⚠️ Active Warnings:")
+                    for warning in warnings:
+                        msg = warning.get('message', warning.get('type', 'Unknown'))
+                        logger.info(f"    • {msg}")
+            
+            logger.info("")
+        
         # Direction banner
         if parsed.direction == "BULLISH":
             logger.info("🟢" * 20)
-            logger.info(f"🚀 PREDICTION: BULLISH")
+            logger.info(f"🚀 LLM PREDICTION: BULLISH")
             logger.info(f"   Confidence: {parsed.confidence}")
             logger.info("🟢" * 20)
         elif parsed.direction == "BEARISH":
             logger.info("🔴" * 20)
-            logger.info(f"📉 PREDICTION: BEARISH")
+            logger.info(f"📉 LLM PREDICTION: BEARISH")
             logger.info(f"   Confidence: {parsed.confidence}")
             logger.info("🔴" * 20)
         else:
             logger.info("🟡" * 20)
-            logger.info(f"⏸️  PREDICTION: NEUTRAL")
+            logger.info(f"⏸️  LLM PREDICTION: NEUTRAL")
             logger.info(f"   Confidence: {parsed.confidence}")
             logger.info("🟡" * 20)
         
@@ -306,6 +363,95 @@ class LLMAnalystService:
         logger.info("")
         logger.info("=" * 80)
         logger.info("")
+    
+    async def save_analysis_to_db(
+        self,
+        parsed: ParsedAnalysis,
+        response: LLMResponse,
+        current_price: float,
+        elapsed: float,
+        market_analysis: Optional[Dict[str, Any]] = None,
+    ):
+        """Save LLM analysis to database with full market context."""
+        if not self.db:
+            return
+        
+        # Extract market context for storage
+        market_context = None
+        signal_factors_used = None
+        smc_bias_at_analysis = None
+        trends_at_analysis = None
+        warnings_at_analysis = None
+        
+        if market_analysis:
+            # Build compact market context
+            market_context = {
+                'signal_type': market_analysis.get('signal_type'),
+                'signal_direction': market_analysis.get('signal_direction'),
+                'signal_confidence': market_analysis.get('signal_confidence'),
+                'smc_bias': market_analysis.get('smc_bias'),
+                'price_zone': market_analysis.get('price_zone') or market_analysis.get('smc_price_zone'),
+                'action_recommendation': market_analysis.get('action_recommendation'),
+                'nearest_support': float(market_analysis['nearest_support']) if market_analysis.get('nearest_support') else None,
+                'nearest_resistance': float(market_analysis['nearest_resistance']) if market_analysis.get('nearest_resistance') else None,
+            }
+            
+            # Signal factors
+            sf = market_analysis.get('signal_factors')
+            if sf:
+                if isinstance(sf, str):
+                    try:
+                        sf = json.loads(sf)
+                    except:
+                        sf = None
+                signal_factors_used = sf
+            
+            # SMC bias
+            smc_bias_at_analysis = market_analysis.get('smc_bias')
+            
+            # Trends
+            trends = market_analysis.get('trends')
+            if trends:
+                if isinstance(trends, str):
+                    try:
+                        trends = json.loads(trends)
+                    except:
+                        trends = None
+                trends_at_analysis = trends
+            
+            # Warnings
+            warnings = market_analysis.get('warnings')
+            if warnings:
+                if isinstance(warnings, str):
+                    try:
+                        warnings = json.loads(warnings)
+                    except:
+                        warnings = None
+                warnings_at_analysis = warnings
+        
+        # Save to database
+        await self.db.save_llm_analysis(
+            analysis_time=datetime.now(timezone.utc),
+            price=current_price,
+            prediction_direction=parsed.direction,
+            prediction_confidence=parsed.confidence,
+            predicted_price_1h=parsed.price_1h,
+            predicted_price_4h=parsed.price_4h,
+            key_levels=f"S: ${parsed.critical_support:,.0f} | R: ${parsed.critical_resistance:,.0f}" if parsed.critical_support and parsed.critical_resistance else "",
+            reasoning=parsed.reasoning,
+            full_response=response.content,
+            model_name=response.model,
+            response_time_seconds=elapsed,
+            # Enhanced fields
+            invalidation_level=parsed.invalidation_level,
+            critical_support=parsed.critical_support,
+            critical_resistance=parsed.critical_resistance,
+            market_context=market_context,
+            signal_factors_used=signal_factors_used,
+            smc_bias_at_analysis=smc_bias_at_analysis,
+            trends_at_analysis=trends_at_analysis,
+            warnings_at_analysis=warnings_at_analysis,
+        )
     
     async def stop(self):
         """Graceful shutdown."""
