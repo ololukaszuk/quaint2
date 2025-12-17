@@ -92,7 +92,7 @@ class LLMAnalystService:
         # Get initial candle time
         self.last_analysis_candle_time = await self.db.get_latest_candle_time()
         if self.last_analysis_candle_time:
-            logger.info(f"Last candle in DB: {self.last_analysis_candle_time}")
+            logger.info(f"Last 1m candle OPEN time in DB: {self.last_analysis_candle_time}")
         else:
             logger.warning("No candles found in database yet")
         
