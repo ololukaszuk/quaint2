@@ -20,6 +20,7 @@ services:
       - ./market-analyzer/migrations/001_market_analyzer_tables.sql:/docker-entrypoint-initdb.d/03-market-analyzer.sql
       - ./market-analyzer/migrations/002_enhanced_schema.sql:/docker-entrypoint-initdb.d/04-market-analyzer-enhancements.sql
       - ./llm-analyst/migrations/001_llm_analyst_tables.sql:/docker-entrypoint-initdb.d/05-llm-analyst.sql
+      - ./llm-analyst/migrations/002_llm_analyst_enhancements.sql:/docker-entrypoint-initdb.d/06-llm-analyst-enhancements.sql
     command: >
       postgres
       -c shared_preload_libraries=timescaledb,pg_cron
