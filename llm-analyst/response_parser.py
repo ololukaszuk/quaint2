@@ -36,14 +36,45 @@ class ParsedAnalysis:
 
 def extract_price(text: str, pattern: str) -> Optional[float]:
     """Extract price value matching pattern from text."""
-    # Look for pattern followed by price
-    match = re.search(rf'{pattern}[:\s]*\$?([\d,]+(?:\.\d+)?)', text, re.IGNORECASE)
-    if match:
-        try:
-            price_str = match.group(1).replace(',', '')
-            return float(price_str)
-        except ValueError:
-            pass
+    # Try multiple extraction strategies
+    
+    # Strategy 1: Direct pattern match with various formats
+    patterns_to_try = [
+        rf'{pattern}[:\s]*\$?([\d,]+(?:\.\d+)?)',  # Original: "support: $87,500"
+        rf'{pattern}.*?[\$]?([\d,]+(?:\.\d+)?)',   # More flexible: "support ... $87,500"
+        rf'-\s*{pattern}[:\s]*\$?([\d,]+(?:\.\d+)?)',  # With bullet: "- support: $87,500"
+        rf'\*\*{pattern}\*\*[:\s]*\$?([\d,]+(?:\.\d+)?)',  # Bold markdown: "**support**: $87,500"
+        rf'{pattern}\s+is\s+\$?([\d,]+(?:\.\d+)?)',  # "support is $87,500"
+        rf'{pattern}\s+at\s+\$?([\d,]+(?:\.\d+)?)',  # "support at $87,500"
+    ]
+    
+    for p in patterns_to_try:
+        match = re.search(p, text, re.IGNORECASE)
+        if match:
+            try:
+                price_str = match.group(1).replace(',', '')
+                price = float(price_str)
+                # Sanity check (BTC price should be reasonable)
+                if 1000 < price < 200000:
+                    return price
+            except (ValueError, IndexError):
+                continue
+    
+    # Strategy 2: Look in same line/paragraph as the keyword
+    lines = text.split('\n')
+    for line in lines:
+        if re.search(pattern, line, re.IGNORECASE):
+            # Extract all prices from this line
+            prices = re.findall(r'\$?([\d,]+(?:\.\d+)?)', line)
+            for price_str in prices:
+                try:
+                    price_str = price_str.replace(',', '')
+                    price = float(price_str)
+                    if 1000 < price < 200000:
+                        return price
+                except ValueError:
+                    continue
+    
     return None
 
 

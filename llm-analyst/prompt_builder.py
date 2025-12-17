@@ -105,12 +105,12 @@ def format_signal_factors(factors: Optional[List[Dict[str, Any]]]) -> str:
         
         if weight > 0:
             bullish_total += weight
-            symbol = "🟢"
+            symbol = "ðŸŸ¢"
         elif weight < 0:
             bearish_total += abs(weight)
-            symbol = "🔴"
+            symbol = "ðŸ”´"
         else:
-            symbol = "⚪"
+            symbol = "âšª"
         
         lines.append(f"  {symbol} {weight:+3d} | {desc}")
     
@@ -185,9 +185,9 @@ def format_pivot_levels(analysis: Dict[str, Any]) -> str:
                         methods_str = ', '.join(str(m) for m in methods)
                     else:
                         methods_str = str(methods)
-                    lines.append(f"  • {zone_type.upper()} ${float(price):,.0f} (strength: {float(strength):.0%}, methods: {methods_str})")
+                    lines.append(f"  â€¢ {zone_type.upper()} ${float(price):,.0f} (strength: {float(strength):.0%}, methods: {methods_str})")
                 elif isinstance(zone, str):
-                    lines.append(f"  • {zone}")
+                    lines.append(f"  â€¢ {zone}")
     
     return "\n".join(lines) if len(lines) > 2 else "No pivot data available."
 
@@ -229,9 +229,9 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
                     high = ob.get('high', 0)
                     strength = float(ob.get('strength', 0))
                     dist = float(ob.get('distance_pct', 0))
-                    lines.append(f"  • {ob_type.upper()} OB: ${float(low):,.0f}-${float(high):,.0f} (strength: {strength:.0%}, {dist:.1f}% away)")
+                    lines.append(f"  â€¢ {ob_type.upper()} OB: ${float(low):,.0f}-${float(high):,.0f} (strength: {strength:.0%}, {dist:.1f}% away)")
                 elif isinstance(ob, str):
-                    lines.append(f"  • {ob}")
+                    lines.append(f"  â€¢ {ob}")
     
     # Fair Value Gaps
     fvgs = analysis.get('smc_fvgs')
@@ -252,7 +252,7 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
                     fvg_type = fvg.get('type', 'unknown')
                     low = fvg.get('low', 0)
                     high = fvg.get('high', 0)
-                    lines.append(f"  • {fvg_type.upper()} FVG: ${float(low):,.0f}-${float(high):,.0f}")
+                    lines.append(f"  â€¢ {fvg_type.upper()} FVG: ${float(low):,.0f}-${float(high):,.0f}")
     
     # Structure Breaks (BOS, CHoCH)
     breaks = analysis.get('smc_breaks')
@@ -271,9 +271,9 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
                     brk_type = brk.get('type', 'unknown')
                     direction = brk.get('direction', 'unknown')
                     price = brk.get('price', 0)
-                    lines.append(f"  • {brk_type} {direction} @ ${float(price):,.0f}")
+                    lines.append(f"  â€¢ {brk_type} {direction} @ ${float(price):,.0f}")
                 elif isinstance(brk, str):
-                    lines.append(f"  • {brk}")
+                    lines.append(f"  â€¢ {brk}")
     
     # Liquidity Pools
     liquidity = analysis.get('smc_liquidity')
@@ -323,9 +323,9 @@ def format_support_resistance(analysis: Dict[str, Any]) -> str:
                     touches = level.get('touches', 0)
                     tf = level.get('timeframe', 'N/A')
                     dist = float(level.get('distance_pct', 0))
-                    lines.append(f"  • ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
+                    lines.append(f"  â€¢ ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
                 elif isinstance(level, str):
-                    lines.append(f"  • {level}")
+                    lines.append(f"  â€¢ {level}")
     else:
         # Fall back to simple nearest support
         if analysis.get('nearest_support'):
@@ -350,9 +350,9 @@ def format_support_resistance(analysis: Dict[str, Any]) -> str:
                     touches = level.get('touches', 0)
                     tf = level.get('timeframe', 'N/A')
                     dist = float(level.get('distance_pct', 0))
-                    lines.append(f"  • ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
+                    lines.append(f"  â€¢ ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
                 elif isinstance(level, str):
-                    lines.append(f"  • {level}")
+                    lines.append(f"  â€¢ {level}")
     else:
         # Fall back to simple nearest resistance
         if analysis.get('nearest_resistance'):
@@ -424,7 +424,7 @@ def format_warnings(analysis: Dict[str, Any]) -> str:
     """Format active warnings and alerts.
     
     Note: Warnings are stored as list of strings in the database,
-    e.g. ["🚫 CLOSE TO STRONG SUPPORT ($87,556) - Short risky before break!"]
+    e.g. ["ðŸš« CLOSE TO STRONG SUPPORT ($87,556) - Short risky before break!"]
     """
     warnings = analysis.get('warnings')
     if not warnings:
@@ -439,7 +439,7 @@ def format_warnings(analysis: Dict[str, Any]) -> str:
     if not warnings or not isinstance(warnings, list):
         return ""
     
-    lines = ["⚠️ ACTIVE WARNINGS:"]
+    lines = ["âš ï¸ ACTIVE WARNINGS:"]
     lines.append("-" * 40)
     
     for warning in warnings:
@@ -564,7 +564,7 @@ def format_signal_history(signals: List[Dict[str, Any]]) -> str:
         direction = sig.get('signal_direction', 'N/A')
         price = float(sig.get('price', 0))
         
-        lines.append(f"{time_str}: {prev} → {current} ({direction}) @ ${price:,.0f}")
+        lines.append(f"{time_str}: {prev} â†’ {current} ({direction}) @ ${price:,.0f}")
         
         # Show key reasons if available (enhanced)
         key_reasons = sig.get('key_reasons')
@@ -580,9 +580,9 @@ def format_signal_history(signals: List[Dict[str, Any]]) -> str:
                     if isinstance(reason, dict):
                         desc = reason.get('description', str(reason))
                         weight = int(reason.get('weight', 0))
-                        lines.append(f"    → {desc} ({weight:+d})")
+                        lines.append(f"    â†’ {desc} ({weight:+d})")
                     else:
-                        lines.append(f"    → {reason}")
+                        lines.append(f"    â†’ {reason}")
     
     # Calculate signal stability
     if len(signals) >= 3:
@@ -656,25 +656,56 @@ ANALYSIS REQUEST:
 
 Based on ALL the data above (signal factors, SMC, pivots, S/R, momentum, structure, warnings), provide:
 
-1. DIRECTION PREDICTION (next 1-4 hours):
-   - State clearly: BULLISH / BEARISH / NEUTRAL
-   - Confidence: HIGH / MEDIUM / LOW
+**IMPORTANT: You MUST use this EXACT format for your response:**
 
-2. PRICE TARGETS:
-   - Expected price in 1 hour: $XX,XXX
-   - Expected price in 4 hours: $XX,XXX
-   - Key invalidation level: $XX,XXX
+### 1. DIRECTION PREDICTION
+- Direction: [BULLISH / BEARISH / NEUTRAL]
+- Confidence: [HIGH / MEDIUM / LOW]
 
-3. KEY LEVELS TO WATCH:
-   - Critical support: $XX,XXX
-   - Critical resistance: $XX,XXX
+### 2. PRICE TARGETS
+- Expected price in 1 hour: $XX,XXX
+- Expected price in 4 hours: $XX,XXX
+- Key invalidation level: $XX,XXX (if broken [below/above])
 
-4. BRIEF REASONING (3-4 sentences):
-   - Reference the weighted signal factors
-   - Consider SMC bias and liquidity targets
-   - Note any relevant warnings
-   - Explain your directional bias
+### 3. KEY LEVELS TO WATCH
+- Critical support: $XX,XXX
+- Critical resistance: $XX,XXX
 
-Be direct and specific. Use the comprehensive data provided to make an informed prediction.""")
+### 4. BRIEF REASONING
+[Your 3-4 sentence analysis here]
+- Reference the weighted signal factors
+- Consider SMC bias and liquidity targets
+- Note any relevant warnings
+- Explain your directional bias
+
+**CRITICAL FORMATTING RULES:**
+✅ DO use the section headers EXACTLY as shown (with ### and numbers)
+✅ DO use bullet points with "-" for each item
+✅ DO include dollar signs before prices: $87,500
+✅ DO specify direction words in all caps: BULLISH, BEARISH, NEUTRAL
+✅ DO be specific with numbers - avoid vague terms
+
+❌ DON'T use different section names or formats
+❌ DON'T skip any sections
+❌ DON'T use markdown tables or code blocks
+❌ DON'T hedge excessively - take a clear stance based on the data
+
+Example of correct format:
+### 1. DIRECTION PREDICTION
+- Direction: BULLISH
+- Confidence: MEDIUM
+
+### 2. PRICE TARGETS
+- Expected price in 1 hour: $87,500
+- Expected price in 4 hours: $87,900
+- Key invalidation level: $87,200 (if broken below)
+
+### 3. KEY LEVELS TO WATCH
+- Critical support: $87,100
+- Critical resistance: $87,800
+
+### 4. BRIEF REASONING
+The market shows bullish signal factors (+30 from CHoCH) outweighing bearish resistance proximity. SMC bias is BULLISH with price in DISCOUNT zone, suggesting institutional buying. However, 4h downtrend and low volume warrant caution, keeping confidence at MEDIUM.
+""")
     
     return "\n".join(sections)
