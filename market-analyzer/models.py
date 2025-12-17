@@ -49,6 +49,22 @@ class CandleArray:
 
     def __len__(self) -> int:
         return len(self.close)
+    
+    def __getitem__(self, key):
+        """
+        Support slicing and indexing operations on CandleArray.
+        Returns a new CandleArray with sliced data.
+        """
+        return CandleArray(
+            time=self.time[key],
+            open=self.open[key],
+            high=self.high[key],
+            low=self.low[key],
+            close=self.close[key],
+            volume=self.volume[key],
+            spread_bps=self.spread_bps[key],
+            taker_buy_ratio=self.taker_buy_ratio[key],
+        )
 
     @staticmethod
     def _ensure_utc(dt: datetime) -> datetime:
