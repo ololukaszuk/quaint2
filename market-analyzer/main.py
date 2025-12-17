@@ -467,6 +467,48 @@ class MarketAnalyzerService:
                     # $57-$59: Summary & metadata
                     self.generate_summary(ctx), signal_changed, previous_type
                 )
+
+                # === INSERT INTO MARKET_SIGNALS (only when signal_changed=True) ===
+                if signal_changed and signal:
+                    logger.info(f"💾 Inserting new signal into market_signals: {signal.signal_type.value} ({signal.direction})")
+                    
+                    await conn.execute(
+                        """
+                        INSERT INTO market_signals (
+                            signal_time, signal_type, signal_direction, signal_confidence,
+                            price, entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
+                            risk_reward_ratio, previous_signal_type, previous_direction, summary,
+                            key_reasons, signal_factors, smc_bias, pivot_daily,
+                            nearest_support, nearest_resistance
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                            $11, $12, $13, $14, $15, $16, $17, $18,
+                            $19, $20
+                        )
+                        """,
+                        # Values
+                        ctx.timestamp,                                              # $1 signal_time
+                        signal.signal_type.value if signal else None,             # $2 signal_type
+                        signal.direction if signal else None,                     # $3 signal_direction
+                        to_python(signal.confidence) if signal else None,         # $4 signal_confidence
+                        to_python(ctx.current_price),                             # $5 price
+                        to_python(signal.setup.entry if signal and signal.setup else None),  # $6 entry_price
+                        to_python(signal.setup.stop_loss if signal and signal.setup else None),  # $7 stop_loss
+                        to_python(signal.setup.take_profit_1 if signal and signal.setup else None),  # $8 tp1
+                        to_python(signal.setup.take_profit_2 if signal and signal.setup else None),  # $9 tp2
+                        to_python(signal.setup.take_profit_3 if signal and signal.setup else None),  # $10 tp3
+                        to_python(signal.setup.risk_reward_ratio if signal and signal.setup else None),  # $11 risk_reward
+                        previous_type,                                            # $12 previous_signal_type
+                        previous_direction,                                       # $13 previous_direction
+                        self.generate_summary(ctx),                               # $14 summary
+                        json.dumps(signal_factors),                               # $15 key_reasons (or signal_factors)
+                        json.dumps(signal_factors),                               # $16 signal_factors
+                        ctx.smc.current_bias if ctx.smc else None,               # $17 smc_bias
+                        to_python(t.pivot if t else None),                        # $18 pivot_daily
+                        float(support_levels[0]['price']) if support_levels else None,  # $19 nearest_support
+                        float(resistance_levels[0]['price']) if resistance_levels else None  # $20 nearest_resistance
+                    )
+                    logger.info("✅ Signal successfully inserted into market_signals")
                                 
         except Exception as e:
             logger.error(f"Error saving analysis: {e}")
