@@ -402,7 +402,7 @@ class MarketAnalyzerService:
                     to_python(f.s1 if f else None), to_python(f.s2 if f else None), to_python(f.s3 if f else None),
                     to_python(c.r4 if c else None), to_python(c.r3 if c else None), to_python(c.s3 if c else None), to_python(c.s4 if c else None),
                     json.dumps(confluence_zones), "ABOVE" if t and ctx.current_price > t.pivot else "BELOW",
-                    ctx.smc.bias if ctx.smc else None,
+                    ctx.smc.current_bias if ctx.smc else None,
                     self.get_price_zone(ctx),
                     to_python(ctx.smc.equilibrium if ctx.smc else None),
                     json.dumps(smc_order_blocks), json.dumps(smc_fvgs),
