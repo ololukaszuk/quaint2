@@ -92,8 +92,16 @@ def format_signal_factors(factors: Optional[List[Dict[str, Any]]]) -> str:
     bearish_total = 0
     
     for factor in sorted_factors[:10]:  # Top 10 factors
-        weight = int(factor.get('weight', 0))  # Convert to int for formatting
-        desc = factor.get('description', 'Unknown')
+        # Handle both dict and string formats
+        if isinstance(factor, dict):
+            weight = int(factor.get('weight', 0))  # Convert to int for formatting
+            desc = factor.get('description', 'Unknown')
+        elif isinstance(factor, str):
+            weight = 0
+            desc = factor
+        else:
+            weight = 0
+            desc = str(factor)
         
         if weight > 0:
             bullish_total += weight
@@ -168,11 +176,18 @@ def format_pivot_levels(analysis: Dict[str, Any]) -> str:
             lines.append("")
             lines.append("Confluence Zones (multiple methods agree):")
             for zone in confluence[:5]:  # Top 5 confluence zones
-                zone_type = zone.get('type', 'unknown')
-                price = zone.get('price', 0)
-                strength = zone.get('strength', 0)
-                methods = zone.get('methods', [])
-                lines.append(f"  • {zone_type.upper()} ${float(price):,.0f} (strength: {strength:.0%}, methods: {', '.join(methods)})")
+                if isinstance(zone, dict):
+                    zone_type = zone.get('type', 'unknown')
+                    price = zone.get('price', 0)
+                    strength = zone.get('strength', 0)
+                    methods = zone.get('methods', [])
+                    if isinstance(methods, list):
+                        methods_str = ', '.join(str(m) for m in methods)
+                    else:
+                        methods_str = str(methods)
+                    lines.append(f"  • {zone_type.upper()} ${float(price):,.0f} (strength: {float(strength):.0%}, methods: {methods_str})")
+                elif isinstance(zone, str):
+                    lines.append(f"  • {zone}")
     
     return "\n".join(lines) if len(lines) > 2 else "No pivot data available."
 
@@ -208,12 +223,15 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
             lines.append("")
             lines.append("Active Order Blocks:")
             for ob in order_blocks[:5]:  # Top 5
-                ob_type = ob.get('type', 'unknown')
-                low = ob.get('low', 0)
-                high = ob.get('high', 0)
-                strength = ob.get('strength', 0)
-                dist = ob.get('distance_pct', 0)
-                lines.append(f"  • {ob_type.upper()} OB: ${float(low):,.0f}-${float(high):,.0f} (strength: {strength:.0%}, {dist:.1f}% away)")
+                if isinstance(ob, dict):
+                    ob_type = ob.get('type', 'unknown')
+                    low = ob.get('low', 0)
+                    high = ob.get('high', 0)
+                    strength = float(ob.get('strength', 0))
+                    dist = float(ob.get('distance_pct', 0))
+                    lines.append(f"  • {ob_type.upper()} OB: ${float(low):,.0f}-${float(high):,.0f} (strength: {strength:.0%}, {dist:.1f}% away)")
+                elif isinstance(ob, str):
+                    lines.append(f"  • {ob}")
     
     # Fair Value Gaps
     fvgs = analysis.get('smc_fvgs')
@@ -225,7 +243,8 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
                 fvgs = None
         
         if fvgs and isinstance(fvgs, list):
-            unfilled = [f for f in fvgs if f.get('unfilled', True)]
+            # Filter unfilled - handle both dict and non-dict items
+            unfilled = [f for f in fvgs if isinstance(f, dict) and f.get('unfilled', True)]
             if unfilled:
                 lines.append("")
                 lines.append(f"Unfilled FVGs ({len(unfilled)}):")
@@ -248,10 +267,13 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
             lines.append("")
             lines.append("Recent Structure Breaks:")
             for brk in breaks[:3]:  # Top 3
-                brk_type = brk.get('type', 'unknown')
-                direction = brk.get('direction', 'unknown')
-                price = brk.get('price', 0)
-                lines.append(f"  • {brk_type} {direction} @ ${float(price):,.0f}")
+                if isinstance(brk, dict):
+                    brk_type = brk.get('type', 'unknown')
+                    direction = brk.get('direction', 'unknown')
+                    price = brk.get('price', 0)
+                    lines.append(f"  • {brk_type} {direction} @ ${float(price):,.0f}")
+                elif isinstance(brk, str):
+                    lines.append(f"  • {brk}")
     
     # Liquidity Pools
     liquidity = analysis.get('smc_liquidity')
@@ -295,12 +317,15 @@ def format_support_resistance(analysis: Dict[str, Any]) -> str:
         if support_levels and isinstance(support_levels, list):
             lines.append("Support Levels:")
             for level in support_levels[:5]:  # Top 5
-                price = level.get('price', 0)
-                strength = level.get('strength', 0)
-                touches = level.get('touches', 0)
-                tf = level.get('timeframe', 'N/A')
-                dist = level.get('distance_pct', 0)
-                lines.append(f"  • ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
+                if isinstance(level, dict):
+                    price = level.get('price', 0)
+                    strength = float(level.get('strength', 0))
+                    touches = level.get('touches', 0)
+                    tf = level.get('timeframe', 'N/A')
+                    dist = float(level.get('distance_pct', 0))
+                    lines.append(f"  • ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
+                elif isinstance(level, str):
+                    lines.append(f"  • {level}")
     else:
         # Fall back to simple nearest support
         if analysis.get('nearest_support'):
@@ -319,12 +344,15 @@ def format_support_resistance(analysis: Dict[str, Any]) -> str:
             lines.append("")
             lines.append("Resistance Levels:")
             for level in resistance_levels[:5]:  # Top 5
-                price = level.get('price', 0)
-                strength = level.get('strength', 0)
-                touches = level.get('touches', 0)
-                tf = level.get('timeframe', 'N/A')
-                dist = level.get('distance_pct', 0)
-                lines.append(f"  • ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
+                if isinstance(level, dict):
+                    price = level.get('price', 0)
+                    strength = float(level.get('strength', 0))
+                    touches = level.get('touches', 0)
+                    tf = level.get('timeframe', 'N/A')
+                    dist = float(level.get('distance_pct', 0))
+                    lines.append(f"  • ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
+                elif isinstance(level, str):
+                    lines.append(f"  • {level}")
     else:
         # Fall back to simple nearest resistance
         if analysis.get('nearest_resistance'):
@@ -393,7 +421,11 @@ def format_market_structure(analysis: Dict[str, Any]) -> str:
 
 
 def format_warnings(analysis: Dict[str, Any]) -> str:
-    """Format active warnings and alerts."""
+    """Format active warnings and alerts.
+    
+    Note: Warnings are stored as list of strings in the database,
+    e.g. ["🚫 CLOSE TO STRONG SUPPORT ($87,556) - Short risky before break!"]
+    """
     warnings = analysis.get('warnings')
     if not warnings:
         return ""
@@ -411,11 +443,13 @@ def format_warnings(analysis: Dict[str, Any]) -> str:
     lines.append("-" * 40)
     
     for warning in warnings:
-        msg = warning.get('message', warning.get('type', 'Unknown warning'))
-        severity = warning.get('severity', 'MEDIUM')
-        
-        icon = "🔴" if severity == 'HIGH' else "🟡" if severity == 'MEDIUM' else "🟢"
-        lines.append(f"  {icon} [{severity}] {msg}")
+        # Warnings are stored as strings
+        if isinstance(warning, str):
+            lines.append(f"  {warning}")
+        elif isinstance(warning, dict):
+            # Fallback for dict format (future compatibility)
+            msg = warning.get('message', warning.get('type', 'Unknown warning'))
+            lines.append(f"  {msg}")
     
     return "\n".join(lines)
 
@@ -545,7 +579,7 @@ def format_signal_history(signals: List[Dict[str, Any]]) -> str:
                 for reason in key_reasons[:2]:  # Top 2 reasons per signal
                     if isinstance(reason, dict):
                         desc = reason.get('description', str(reason))
-                        weight = reason.get('weight', 0)
+                        weight = int(reason.get('weight', 0))
                         lines.append(f"    → {desc} ({weight:+d})")
                     else:
                         lines.append(f"    → {reason}")
