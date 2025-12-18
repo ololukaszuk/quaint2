@@ -191,29 +191,28 @@ type MarketAnalysis struct {
 
 // MarketSignal - Enhanced with signal factors
 type MarketSignal struct {
-	ID                int64           `json:"id"`
-	SignalTime        time.Time       `json:"signal_time"`
-	SignalType        string          `json:"signal_type"`
-	SignalDirection   string          `json:"signal_direction"`
-	SignalConfidence  float64         `json:"signal_confidence"`
-	Price             float64         `json:"price,string"`
-	EntryPrice        *float64        `json:"entry_price,string,omitempty"`
-	StopLoss          *float64        `json:"stop_loss,string,omitempty"`
-	TakeProfit1       *float64        `json:"take_profit_1,string,omitempty"`
-	TakeProfit2       *float64        `json:"take_profit_2,string,omitempty"`
-	TakeProfit3       *float64        `json:"take_profit_3,string,omitempty"`
-	RiskRewardRatio   *float64        `json:"risk_reward_ratio,omitempty"`
-	PreviousSignalType *string        `json:"previous_signal_type,omitempty"`
-	PreviousDirection *string         `json:"previous_direction,omitempty"`
-	Summary           *string         `json:"summary,omitempty"`
-	KeyReasons        json.RawMessage `json:"key_reasons,omitempty"`
-	// Enhanced fields
-	SignalFactors     json.RawMessage `json:"signal_factors,omitempty"`
-	SMCBias           *string         `json:"smc_bias,omitempty"`
-	PivotDaily        *float64        `json:"pivot_daily,string,omitempty"`
-	NearestSupport    *float64        `json:"nearest_support,string,omitempty"`
-	NearestResistance *float64        `json:"nearest_resistance,string,omitempty"`
-	CreatedAt         time.Time       `json:"created_at"`
+    ID                   int64             `json:"id"`
+    SignalTime           time.Time         `json:"signal_time"`
+    SignalType           string            `json:"signal_type"`
+    SignalDirection      string            `json:"signal_direction"`
+    SignalConfidence     float64           `json:"signal_confidence"`
+    Price                float64           `json:"price,string"`
+    EntryPrice           *float64          `json:"entry_price,string,omitempty"`
+    StopLoss             *float64          `json:"stop_loss,string,omitempty"`
+    TakeProfit1          *float64          `json:"take_profit_1,string,omitempty"`
+    TakeProfit2          *float64          `json:"take_profit_2,string,omitempty"`
+    TakeProfit3          *float64          `json:"take_profit_3,string,omitempty"`
+    RiskRewardRatio      *float64          `json:"risk_reward_ratio,omitempty"`
+    PreviousSignalType   *string           `json:"previous_signal_type,omitempty"`
+    PreviousDirection    *string           `json:"previous_direction,omitempty"`
+    Summary              *string           `json:"summary,omitempty"`
+    KeyReasons           json.RawMessage   `json:"key_reasons,omitempty"`
+    SignalFactors        json.RawMessage   `json:"signal_factors,omitempty"`
+    SMCBias              *string           `json:"smc_bias,omitempty"`
+    PivotDaily           *float64          `json:"pivot_daily,string,omitempty"`
+    NearestSupport       *float64          `json:"nearest_support,string,omitempty"`
+    NearestResistance    *float64          `json:"nearest_resistance,string,omitempty"`
+    CreatedAt            time.Time         `json:"created_at"`
 }
 
 // ============================================================================
@@ -682,7 +681,7 @@ func getMarketAnalysisHandler(w http.ResponseWriter, r *http.Request) {
 			&a.SupportLevels, &a.ResistanceLevels,
 			&a.SMCBias, &a.PriceZone, &a.EquilibriumPrice,
 			&a.SMCPriceZone, &a.SMCEquilibrium, &a.SMCOrderBlocks, &a.SMCFVGs, &a.SMCBreaks, &a.SMCLiquidity,
-			&a.DailyPivot, &a.PriceVsPivot,
+			&a.DailyPivot, &a.PriceVsPivot,  // <-- ADD THESE TWO
 			&a.PivotDaily, &a.PivotR1Traditional, &a.PivotR2Traditional, &a.PivotR3Traditional,
 			&a.PivotS1Traditional, &a.PivotS2Traditional, &a.PivotS3Traditional,
 			&a.PivotR1Fibonacci, &a.PivotR2Fibonacci, &a.PivotR3Fibonacci,
