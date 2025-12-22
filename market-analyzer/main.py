@@ -309,7 +309,14 @@ class MarketAnalyzerService:
 
                 # Check if new columns exist (migration 003)
                 has_woodie = await conn.fetchval(
-                    "SELECT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'market_analysis' AND column_name = 'pivot_woodie')"
+                    """
+                    SELECT EXISTS (
+                    SELECT FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                        AND table_name   = 'market_analysis'
+                        AND column_name  = 'pivot_woodie'
+                    )
+                    """
                 )
                 
                 if has_woodie:
