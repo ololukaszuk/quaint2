@@ -202,7 +202,7 @@ class MarketAnalyzerService:
         previous_type: Optional[str] = None,
         previous_direction: Optional[str] = None
     ):
-        """Save analysis to database."""
+        """Save analysis to database with ALL pivot columns."""
         if not self.db or not self.db.pool:
             return
         
@@ -213,14 +213,14 @@ class MarketAnalyzerService:
                 # === 1. SIGNAL FACTORS (with weights) ===
                 signal_factors = []
                 if signal and signal.reasons:
-                    for reasons in signal.reasons[:10]:  # Top 10 reasons
+                    for reasons in signal.reasons[:10]:
                         signal_factors.append({
                             "description": reasons.description,
                             "weight": reasons.weight,
                             "type": "bullish" if reasons.weight > 0 else "bearish"
                         })
                 
-                # === 2. TRENDS (enhanced with EMA and structure) ===
+                # === 2. TRENDS ===
                 trends_json = {}
                 for tf, trend in ctx.trends.items():
                     trends_json[tf] = {
@@ -230,315 +230,308 @@ class MarketAnalyzerService:
                         "structure": getattr(trend, 'structure', '')
                     }
                 
-                # === 3. PIVOT POINTS (all methods) ===
-                pivots = ctx.pivots  # Assuming this is available in context
+                # === 3. ALL PIVOT POINTS (5 methods) ===
+                pivots = ctx.pivots
                 t = pivots.traditional if pivots else None
                 f = pivots.fibonacci if pivots else None
                 c = pivots.camarilla if pivots else None
+                w = pivots.woodie if pivots else None
+                d = pivots.demark if pivots else None
                 
-
-                # === 4. SMC DATA (complete) ===
+                # === 4. SMC DATA ===
                 smc_order_blocks = []
                 if ctx.smc:
-                    if ctx.smc.bullish_obs:
-                        for ob in ctx.smc.bullish_obs:
-                            smc_order_blocks.append({
-                                "type": "bullish",
-                                "low": float(ob.bottom),      # Use .bottom, not .low
-                                "high": float(ob.top),        # Use .top, not .high
-                                "strength": ob.strength,
-                                "distance_pct": abs((ob.top - ctx.current_price) / ctx.current_price * 100)
-                            })
-                    
-                    if ctx.smc.bearish_obs:
-                        for ob in ctx.smc.bearish_obs:
-                            smc_order_blocks.append({
-                                "type": "bearish",
-                                "low": float(ob.bottom),
-                                "high": float(ob.top),
-                                "strength": ob.strength,
-                                "distance_pct": abs((ctx.current_price - ob.bottom) / ctx.current_price * 100)
-                            })
+                    for ob in (ctx.smc.bullish_obs or []):
+                        smc_order_blocks.append({
+                            "type": "bullish", "low": float(ob.bottom), "high": float(ob.top),
+                            "strength": ob.strength,
+                            "distance_pct": abs((ob.top - ctx.current_price) / ctx.current_price * 100)
+                        })
+                    for ob in (ctx.smc.bearish_obs or []):
+                        smc_order_blocks.append({
+                            "type": "bearish", "low": float(ob.bottom), "high": float(ob.top),
+                            "strength": ob.strength,
+                            "distance_pct": abs((ctx.current_price - ob.bottom) / ctx.current_price * 100)
+                        })
 
                 smc_fvgs = []
                 if ctx.smc:
-                    if ctx.smc.bullish_fvgs:  # Use bullish_fvgs, not fvgs
-                        for fvg in ctx.smc.bullish_fvgs:
-                            smc_fvgs.append({
-                                "type": "bullish",
-                                "low": float(fvg.bottom),
-                                "high": float(fvg.top),
-                                "unfilled": not fvg.filled
-                            })
-                    
-                    if ctx.smc.bearish_fvgs:  # Use bearish_fvgs
-                        for fvg in ctx.smc.bearish_fvgs:
-                            smc_fvgs.append({
-                                "type": "bearish",
-                                "low": float(fvg.bottom),
-                                "high": float(fvg.top),
-                                "unfilled": not fvg.filled
-                            })
+                    for fvg in (ctx.smc.bullish_fvgs or []):
+                        smc_fvgs.append({"type": "bullish", "low": float(fvg.bottom), "high": float(fvg.top), "unfilled": not fvg.filled})
+                    for fvg in (ctx.smc.bearish_fvgs or []):
+                        smc_fvgs.append({"type": "bearish", "low": float(fvg.bottom), "high": float(fvg.top), "unfilled": not fvg.filled})
 
                 smc_breaks = []
-                if ctx.smc and ctx.smc.structure_breaks:  # Use structure_breaks, not choch
+                if ctx.smc and ctx.smc.structure_breaks:
                     for brk in ctx.smc.structure_breaks:
                         if brk.type == "CHOCH":
-                            smc_breaks.append({
-                                "type": "CHoCH",
-                                "direction": brk.direction,
-                                "price": float(brk.break_level)
-                            })
+                            smc_breaks.append({"type": "CHoCH", "direction": brk.direction, "price": float(brk.break_level)})
 
                 smc_liquidity = {
                     "buy_side": [float(p) for p in ctx.smc.buy_side_liquidity] if ctx.smc and ctx.smc.buy_side_liquidity else [],
                     "sell_side": [float(p) for p in ctx.smc.sell_side_liquidity] if ctx.smc and ctx.smc.sell_side_liquidity else []
                 }
                 
-                # === 5. SUPPORT/RESISTANCE (all levels) ===
-                support_levels = []
-                for level in ctx.support_levels[:3]:
-                    support_levels.append({
-                        "price": float(level.price),
-                        "strength": level.strength,
-                        "touches": level.touches,
-                        "timeframe": level.source_timeframe,  # ✅ Use source_timeframe
-                        "distance_pct": abs((level.price - ctx.current_price) / ctx.current_price * 100)
-                    })
-
-                resistance_levels = []
-                for level in ctx.resistance_levels[:3]:
-                    resistance_levels.append({
-                        "price": float(level.price),
-                        "strength": level.strength,
-                        "touches": level.touches,
-                        "timeframe": level.source_timeframe,  # ✅ Use source_timeframe
-                        "distance_pct": abs((level.price - ctx.current_price) / ctx.current_price * 100)
-                    })
+                # === 5. SUPPORT/RESISTANCE ===
+                support_levels = [{"price": float(l.price), "strength": l.strength, "touches": l.touches,
+                                   "timeframe": l.source_timeframe, "distance_pct": abs((l.price - ctx.current_price) / ctx.current_price * 100)}
+                                  for l in ctx.support_levels[:3]]
+                resistance_levels = [{"price": float(l.price), "strength": l.strength, "touches": l.touches,
+                                      "timeframe": l.source_timeframe, "distance_pct": abs((l.price - ctx.current_price) / ctx.current_price * 100)}
+                                     for l in ctx.resistance_levels[:3]]
                 
-                # === 6. MOMENTUM (all timeframes) ===
-                momentum = {}
-                for tf, mom in ctx.momentum.items():
-                    momentum[tf] = {
-                        "rsi": mom.rsi if hasattr(mom, 'rsi') else None,
-                        "volume_ratio": mom.volume_ratio if hasattr(mom, 'volume_ratio') else None,
-                        "taker_buy_ratio": mom.taker_buy_ratio if hasattr(mom, 'taker_buy_ratio') else None
-                    }
+                # === 6. MOMENTUM ===
+                momentum = {tf: {"rsi": mom.rsi, "volume_ratio": mom.volume_ratio, "taker_buy_ratio": mom.taker_buy_ratio}
+                           for tf, mom in ctx.momentum.items()}
                 
-                # === 7. MARKET STRUCTURE ===
+                # === 7. STRUCTURE ===
                 structure_pattern = getattr(ctx.structure, 'pattern', None)
                 structure_last_high = getattr(ctx.structure, 'last_high', None)
                 structure_last_low = getattr(ctx.structure, 'last_low', None)
                 
-                # === 8. CONFLUENCE ZONES ===
+                # === 8. CONFLUENCE ===
                 confluence_zones = []
                 if pivots:
                     try:
-                        nearest_r = pivots.get_nearest_resistance(ctx.current_price)
-                        nearest_s = pivots.get_nearest_support(ctx.current_price)
-                        if nearest_r:
-                            confluence_zones.append({"type": "resistance", "data": nearest_r})
-                        if nearest_s:
-                            confluence_zones.append({"type": "support", "data": nearest_s})
-                    except:
-                        pass
-
-                json.dumps(confluence_zones),
-
-                # === 9. WARNINGS ===
-                warnings_text = self.generate_warnings(ctx)  # Generate warnings
-                if ctx.signal and ctx.signal.warnings:
-                    warnings_text.extend(ctx.signal.warnings)
-
-                # Deduplicate
-                warnings_text = list(dict.fromkeys(warnings_text))
-
-                # Store in database
-                warnings = warnings_text
+                        nr = pivots.get_nearest_resistance(ctx.current_price)
+                        ns = pivots.get_nearest_support(ctx.current_price)
+                        if nr: confluence_zones.append({"type": "resistance", "data": nr})
+                        if ns: confluence_zones.append({"type": "support", "data": ns})
+                    except: pass
                 
-                # === 10. ACTION RECOMMENDATION ===
-                action = "WAIT"  # Default
-                if signal and signal.confidence > 60:
-                    action = signal.direction
+                # === 9. WARNINGS ===
+                warnings = self.generate_warnings(ctx)
+                if signal and signal.warnings: warnings.extend(signal.warnings)
+                warnings = list(dict.fromkeys(warnings))[:5]
+                
+                # === 10. ACTION ===
+                action = signal.direction if signal and signal.confidence > 60 else "WAIT"
 
-                # === INSERT QUERY ===
-                await conn.execute(
-                    """
-                    INSERT INTO market_analysis (
-                        analysis_time, price, signal_type, signal_direction, signal_confidence,
-                        entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3, risk_reward_ratio,
-                        signal_factors, trends,
-                        nearest_support, nearest_resistance, support_strength, resistance_strength,
-                        pivot_daily, pivot_r3_traditional, pivot_r2_traditional, pivot_r1_traditional,
-                        pivot_s1_traditional, pivot_s2_traditional, pivot_s3_traditional,
-                        pivot_r3_fibonacci, pivot_r2_fibonacci, pivot_r1_fibonacci,
-                        pivot_s1_fibonacci, pivot_s2_fibonacci, pivot_s3_fibonacci,
-                        pivot_r4_camarilla, pivot_r3_camarilla, pivot_s3_camarilla, pivot_s4_camarilla,
-                        pivot_confluence_zones, price_vs_pivot,
-                        smc_bias, price_zone, smc_price_zone, smc_equilibrium,
-                        smc_order_blocks, smc_fvgs, smc_breaks, smc_liquidity,
-                        support_levels, resistance_levels, momentum,
-                        rsi_1h, volume_ratio_1h,
-                        daily_pivot, equilibrium_price,
-                        structure_pattern, structure_last_high, structure_last_low,
-                        warnings, action_recommendation,
-                        summary, signal_changed, previous_signal
-                    ) VALUES (
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                        $14, $15, $16, $17,
-                        $18, $19, $20, $21, $22, $23, $24,
-                        $25, $26, $27, $28, $29, $30,
-                        $31, $32, $33, $34,
-                        $35, $36,
-                        $37, $38, $39, $40,
-                        $41, $42, $43, $44,
-                        $45, $46, $47,
-                        $48, $49,
-                        $50, $51,
-                        $52, $53, $54,
-                        $55, $56,
-                        $57, $58, $59
-                    )
-                    """,
-                    # $1-$5: Basic price & signal
-                    ctx.timestamp, to_python(ctx.current_price),
-                    signal.signal_type.value if signal else None,
-                    signal.direction if signal else None,
-                    to_python(signal.confidence) if signal else None,
-                    
-                    # $6-$11: Trade setup
-                    to_python(signal.setup.entry if signal and signal.setup else None),
-                    to_python(signal.setup.stop_loss if signal and signal.setup else None),
-                    to_python(signal.setup.take_profit_1 if signal and signal.setup else None),
-                    to_python(signal.setup.take_profit_2 if signal and signal.setup else None),
-                    to_python(signal.setup.take_profit_3 if signal and signal.setup else None),
-                    to_python(signal.setup.risk_reward_ratio if signal and signal.setup else None),
-                    
-                    # $12-$13: Signal & trends
-                    json.dumps(signal_factors),
-                    json.dumps(trends_json),
-                    
-                    # $14-$17: Nearest support/resistance (from support_levels[0] & resistance_levels[0])
-                    float(support_levels[0]['price']) if support_levels else None,  # $14 nearest_support
-                    float(resistance_levels[0]['price']) if resistance_levels else None,  # $15 nearest_resistance
-                    support_levels[0]['strength'] if support_levels else None,  # $16 support_strength
-                    resistance_levels[0]['strength'] if resistance_levels else None,  # $17 resistance_strength
-                    
-                    # $18-$30: Pivot points (traditional)
-                    to_python(t.pivot if t else None),
-                    to_python(t.r3 if t else None), to_python(t.r2 if t else None), to_python(t.r1 if t else None),
-                    to_python(t.s1 if t else None), to_python(t.s2 if t else None), to_python(t.s3 if t else None),
-                    
-                    # $25-$30: Pivot points (fibonacci)
-                    to_python(f.r3 if f else None), to_python(f.r2 if f else None), to_python(f.r1 if f else None),
-                    to_python(f.s1 if f else None), to_python(f.s2 if f else None), to_python(f.s3 if f else None),
-                    
-                    # $31-$34: Pivot points (camarilla)
-                    to_python(c.r4 if c else None), to_python(c.r3 if c else None), to_python(c.s3 if c else None), to_python(c.s4 if c else None),
-                    
-                    # $35-$36: Confluence zones & price vs pivot
-                    json.dumps(confluence_zones),
-                    "ABOVE" if t and ctx.current_price > t.pivot else "BELOW",
-                    
-                    # $37-$40: SMC bias & zones
-                    ctx.smc.current_bias if ctx.smc else None,
-                    self.get_price_zone(ctx),  # $38 price_zone (old schema)
-                    self.get_price_zone(ctx),  # $39 smc_price_zone (new schema, same value)
-                    to_python(ctx.smc.equilibrium if ctx.smc else None),
-                    
-                    # $41-$44: SMC data
-                    json.dumps(smc_order_blocks), json.dumps(smc_fvgs),
-                    json.dumps(smc_breaks), json.dumps(smc_liquidity),
-                    
-                    # $45-$47: Levels & momentum
-                    json.dumps(support_levels), json.dumps(resistance_levels),
-                    json.dumps(momentum),
-                    
-                    # $48-$49: Momentum indicators (1H)
-                    ctx.momentum.get('1h').rsi if ctx.momentum.get('1h') else None,
-                    ctx.momentum.get('1h').volume_ratio if ctx.momentum.get('1h') else None,
-                    
-                    # $50-$51: Pivot duplicates (old schema)
-                    to_python(t.pivot if t else None),  # $50 daily_pivot
-                    to_python(ctx.smc.equilibrium if ctx.smc else None),  # $51 equilibrium_price
-                    
-                    # $52-$54: Market structure
-                    structure_pattern, to_python(structure_last_high), to_python(structure_last_low),
-                    
-                    # $55-$56: Warnings & action
-                    json.dumps(warnings), action,
-                    
-                    # $57-$59: Summary & metadata
-                    self.generate_summary(ctx), signal_changed, previous_type
+                # Check if new columns exist (migration 003)
+                has_woodie = await conn.fetchval(
+                    "SELECT EXISTS (SELECT FROM information_schema.columns WHERE table_name = 'market_analysis' AND column_name = 'pivot_woodie')"
                 )
+                
+                if has_woodie:
+                    # Full insert with all 5 pivot methods
+                    await conn.execute("""
+                        INSERT INTO market_analysis (
+                            analysis_time, price, signal_type, signal_direction, signal_confidence,
+                            entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3, risk_reward_ratio,
+                            signal_factors, trends,
+                            nearest_support, nearest_resistance, support_strength, resistance_strength,
+                            pivot_daily, pivot_r3_traditional, pivot_r2_traditional, pivot_r1_traditional,
+                            pivot_s1_traditional, pivot_s2_traditional, pivot_s3_traditional,
+                            pivot_r3_fibonacci, pivot_r2_fibonacci, pivot_r1_fibonacci,
+                            pivot_s1_fibonacci, pivot_s2_fibonacci, pivot_s3_fibonacci,
+                            pivot_camarilla, pivot_r1_camarilla, pivot_r2_camarilla, pivot_r3_camarilla, pivot_r4_camarilla,
+                            pivot_s1_camarilla, pivot_s2_camarilla, pivot_s3_camarilla, pivot_s4_camarilla,
+                            pivot_woodie, pivot_r1_woodie, pivot_r2_woodie, pivot_r3_woodie,
+                            pivot_s1_woodie, pivot_s2_woodie, pivot_s3_woodie,
+                            pivot_demark, pivot_r1_demark, pivot_s1_demark,
+                            pivot_confluence_zones, price_vs_pivot,
+                            smc_bias, price_zone, smc_price_zone, smc_equilibrium,
+                            smc_order_blocks, smc_fvgs, smc_breaks, smc_liquidity,
+                            support_levels, resistance_levels, momentum,
+                            rsi_1h, volume_ratio_1h, daily_pivot, equilibrium_price,
+                            structure_pattern, structure_last_high, structure_last_low,
+                            warnings, action_recommendation, summary, signal_changed, previous_signal
+                        ) VALUES (
+                            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+                            $18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,
+                            $31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,
+                            $50,$51,$52,$53,$54,$55,$56,$57,$58,$59,$60,$61,$62,$63,$64,$65,$66,$67,$68,$69,$70,$71,$72
+                        )
+                    """,
+                        ctx.timestamp, to_python(ctx.current_price),
+                        signal.signal_type.value if signal else None, signal.direction if signal else None,
+                        to_python(signal.confidence) if signal else None,
+                        to_python(signal.setup.entry if signal and signal.setup else None),
+                        to_python(signal.setup.stop_loss if signal and signal.setup else None),
+                        to_python(signal.setup.take_profit_1 if signal and signal.setup else None),
+                        to_python(signal.setup.take_profit_2 if signal and signal.setup else None),
+                        to_python(signal.setup.take_profit_3 if signal and signal.setup else None),
+                        to_python(signal.setup.risk_reward_ratio if signal and signal.setup else None),
+                        json.dumps(signal_factors), json.dumps(trends_json),
+                        float(support_levels[0]['price']) if support_levels else None,
+                        float(resistance_levels[0]['price']) if resistance_levels else None,
+                        support_levels[0]['strength'] if support_levels else None,
+                        resistance_levels[0]['strength'] if resistance_levels else None,
+                        # Traditional
+                        to_python(t.pivot if t else None),
+                        to_python(t.r3 if t else None), to_python(t.r2 if t else None), to_python(t.r1 if t else None),
+                        to_python(t.s1 if t else None), to_python(t.s2 if t else None), to_python(t.s3 if t else None),
+                        # Fibonacci
+                        to_python(f.r3 if f else None), to_python(f.r2 if f else None), to_python(f.r1 if f else None),
+                        to_python(f.s1 if f else None), to_python(f.s2 if f else None), to_python(f.s3 if f else None),
+                        # Camarilla (complete)
+                        to_python(c.pivot if c else None),
+                        to_python(c.r1 if c else None), to_python(c.r2 if c else None), to_python(c.r3 if c else None), to_python(c.r4 if c else None),
+                        to_python(c.s1 if c else None), to_python(c.s2 if c else None), to_python(c.s3 if c else None), to_python(c.s4 if c else None),
+                        # Woodie
+                        to_python(w.pivot if w else None),
+                        to_python(w.r1 if w else None), to_python(w.r2 if w else None), to_python(w.r3 if w else None),
+                        to_python(w.s1 if w else None), to_python(w.s2 if w else None), to_python(w.s3 if w else None),
+                        # DeMark
+                        to_python(d.pivot if d else None), to_python(d.r1 if d else None), to_python(d.s1 if d else None),
+                        # Rest
+                        json.dumps(confluence_zones), "ABOVE" if t and ctx.current_price > t.pivot else "BELOW",
+                        ctx.smc.current_bias if ctx.smc else None, self.get_price_zone(ctx), self.get_price_zone(ctx),
+                        to_python(ctx.smc.equilibrium if ctx.smc else None),
+                        json.dumps(smc_order_blocks), json.dumps(smc_fvgs), json.dumps(smc_breaks), json.dumps(smc_liquidity),
+                        json.dumps(support_levels), json.dumps(resistance_levels), json.dumps(momentum),
+                        ctx.momentum.get('1h').rsi if ctx.momentum.get('1h') else None,
+                        ctx.momentum.get('1h').volume_ratio if ctx.momentum.get('1h') else None,
+                        to_python(t.pivot if t else None), to_python(ctx.smc.equilibrium if ctx.smc else None),
+                        structure_pattern, to_python(structure_last_high), to_python(structure_last_low),
+                        json.dumps(warnings), action, self.generate_summary(ctx), signal_changed, previous_type
+                    )
+                else:
+                # === INSERT QUERY (FALLBACK)===
+                    await conn.execute(
+                        """
+                        INSERT INTO market_analysis (
+                            analysis_time, price, signal_type, signal_direction, signal_confidence,
+                            entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3, risk_reward_ratio,
+                            signal_factors, trends,
+                            nearest_support, nearest_resistance, support_strength, resistance_strength,
+                            pivot_daily, pivot_r3_traditional, pivot_r2_traditional, pivot_r1_traditional,
+                            pivot_s1_traditional, pivot_s2_traditional, pivot_s3_traditional,
+                            pivot_r3_fibonacci, pivot_r2_fibonacci, pivot_r1_fibonacci,
+                            pivot_s1_fibonacci, pivot_s2_fibonacci, pivot_s3_fibonacci,
+                            pivot_r4_camarilla, pivot_r3_camarilla, pivot pivot_s3_camarilla, pivot_s4_camarilla,
+                            pivot_confluence_zones, price_vs_pivot,
+                            smc_bias, price_zone, smc_price_zone, smc_equilibrium,
+                            smc_order_blocks, smc_fvgs, smc_breaks, smc_liquidity,
+                            support_levels, resistance_levels, momentum,
+                            rsi_1h, volume_ratio_1h,
+                            daily_pivot, equilibrium_price,
+                            structure_pattern, structure_last_high, structure_last_low,
+                            warnings, action_recommendation,
+                            summary, signal_changed, previous_signal
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                            $14, $15, $16, $17,
+                            $18, $19, $20, $21, $22, $23, $24,
+                            $25, $26, $27, $28, $29, $30,
+                            $31, $32, $33, $34,
+                            $35, $36,
+                            $37, $38, $39, $40,
+                            $41, $42, $43, $44,
+                            $45, $46, $47,
+                            $48, $49,
+                            $50, $51,
+                            $52, $53, $54,
+                            $55, $56,
+                            $57, $58, $59
+                        )
+                        """,
+                        # $1-$5: Basic price & signal
+                        ctx.timestamp, to_python(ctx.current_price),
+                        signal.signal_type.value if signal else None,
+                        signal.direction if signal else None,
+                        to_python(signal.confidence) if signal else None,
+                        
+                        # $6-$11: Trade setup
+                        to_python(signal.setup.entry if signal and signal.setup else None),
+                        to_python(signal.setup.stop_loss if signal and signal.setup else None),
+                        to_python(signal.setup.take_profit_1 if signal and signal.setup else None),
+                        to_python(signal.setup.take_profit_2 if signal and signal.setup else None),
+                        to_python(signal.setup.take_profit_3 if signal and signal.setup else None),
+                        to_python(signal.setup.risk_reward_ratio if signal and signal.setup else None),
+                        
+                        # $12-$13: Signal & trends
+                        json.dumps(signal_factors),
+                        json.dumps(trends_json),
+                        
+                        # $14-$17: Nearest support/resistance (from support_levels[0] & resistance_levels[0])
+                        float(support_levels[0]['price']) if support_levels else None,  # $14 nearest_support
+                        float(resistance_levels[0]['price']) if resistance_levels else None,  # $15 nearest_resistance
+                        support_levels[0]['strength'] if support_levels else None,  # $16 support_strength
+                        resistance_levels[0]['strength'] if resistance_levels else None,  # $17 resistance_strength
+                        
+                        # $18-$30: Pivot points (traditional)
+                        to_python(t.pivot if t else None),
+                        to_python(t.r3 if t else None), to_python(t.r2 if t else None), to_python(t.r1 if t else None),
+                        to_python(t.s1 if t else None), to_python(t.s2 if t else None), to_python(t.s3 if t else None),
+                        
+                        # $25-$30: Pivot points (fibonacci)
+                        to_python(f.r3 if f else None), to_python(f.r2 if f else None), to_python(f.r1 if f else None),
+                        to_python(f.s1 if f else None), to_python(f.s2 if f else None), to_python(f.s3 if f else None),
+                        
+                        # $31-$34: Pivot points (camarilla)
+                        to_python(c.r4 if c else None), to_python(c.r3 if c else None), to_python(c.s3 if c else None), to_python(c.s4 if c else None),
+                        
+                        # $35-$36: Confluence zones & price vs pivot
+                        json.dumps(confluence_zones),
+                        "ABOVE" if t and ctx.current_price > t.pivot else "BELOW",
+                        
+                        # $37-$40: SMC bias & zones
+                        ctx.smc.current_bias if ctx.smc else None,
+                        self.get_price_zone(ctx),  # $38 price_zone (old schema)
+                        self.get_price_zone(ctx),  # $39 smc_price_zone (new schema, same value)
+                        to_python(ctx.smc.equilibrium if ctx.smc else None),
+                        
+                        # $41-$44: SMC data
+                        json.dumps(smc_order_blocks), json.dumps(smc_fvgs),
+                        json.dumps(smc_breaks), json.dumps(smc_liquidity),
+                        
+                        # $45-$47: Levels & momentum
+                        json.dumps(support_levels), json.dumps(resistance_levels),
+                        json.dumps(momentum),
+                        
+                        # $48-$49: Momentum indicators (1H)
+                        ctx.momentum.get('1h').rsi if ctx.momentum.get('1h') else None,
+                        ctx.momentum.get('1h').volume_ratio if ctx.momentum.get('1h') else None,
+                        
+                        # $50-$51: Pivot duplicates (old schema)
+                        to_python(t.pivot if t else None),  # $50 daily_pivot
+                        to_python(ctx.smc.equilibrium if ctx.smc else None),  # $51 equilibrium_price
+                        
+                        # $52-$54: Market structure
+                        structure_pattern, to_python(structure_last_high), to_python(structure_last_low),
+                        
+                        # $55-$56: Warnings & action
+                        json.dumps(warnings), action,
+                        
+                        # $57-$59: Summary & metadata
+                        self.generate_summary(ctx), signal_changed, previous_type
+                    )
 
-                # === INSERT INTO MARKET_SIGNALS ===
-                # Only insert when signal TYPE or DIRECTION actually changes
-                # This prevents duplicate entries for same signal with minor confidence fluctuations
-                should_insert = False
+                # Insert signal if changed
                 if signal and signal.direction != "NONE":
                     current_type = signal.signal_type.value
                     current_direction = signal.direction
-                    
-                    # Insert if this is a new type or direction change
-                    type_changed = (previous_type != current_type)
-                    direction_changed = (previous_direction != current_direction)
-                    
-                    should_insert = type_changed or direction_changed
-                    
-                    if should_insert:
-                        logger.info(
-                            f"💾 Signal change detected - Inserting into market_signals: "
-                            f"{previous_type}({previous_direction}) → {current_type}({current_direction})"
-                        )
-                    else:
-                        logger.debug(
-                            f"⏭️  Signal unchanged ({current_type} {current_direction}) - "
-                            f"Skipping market_signals insert"
-                        )
-                
-                if should_insert:
-                    
-                    await conn.execute(
-                        """
-                        INSERT INTO market_signals (
-                            signal_time, signal_type, signal_direction, signal_confidence,
-                            price, entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
-                            risk_reward_ratio, previous_signal_type, previous_direction, summary,
-                            key_reasons, signal_factors, smc_bias, pivot_daily,
-                            nearest_support, nearest_resistance
-                        ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                            $11, $12, $13, $14, $15, $16, $17, $18,
-                            $19, $20
-                        )
+                    if previous_type != current_type or previous_direction != current_direction:
+                        logger.info(f"💾 Signal change: {previous_type}({previous_direction}) → {current_type}({current_direction})")
+                        await conn.execute("""
+                            INSERT INTO market_signals (
+                                signal_time, signal_type, signal_direction, signal_confidence, price,
+                                entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
+                                risk_reward_ratio, previous_signal_type, previous_direction, summary,
+                                key_reasons, signal_factors, smc_bias, pivot_daily, nearest_support, nearest_resistance
+                            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
                         """,
-                        # Values
-                        ctx.timestamp,                                              # $1 signal_time
-                        signal.signal_type.value if signal else None,             # $2 signal_type
-                        signal.direction if signal else None,                     # $3 signal_direction
-                        to_python(signal.confidence) if signal else None,         # $4 signal_confidence
-                        to_python(ctx.current_price),                             # $5 price
-                        to_python(signal.setup.entry if signal and signal.setup else None),  # $6 entry_price
-                        to_python(signal.setup.stop_loss if signal and signal.setup else None),  # $7 stop_loss
-                        to_python(signal.setup.take_profit_1 if signal and signal.setup else None),  # $8 tp1
-                        to_python(signal.setup.take_profit_2 if signal and signal.setup else None),  # $9 tp2
-                        to_python(signal.setup.take_profit_3 if signal and signal.setup else None),  # $10 tp3
-                        to_python(signal.setup.risk_reward_ratio if signal and signal.setup else None),  # $11 risk_reward
-                        previous_type,                                            # $12 previous_signal_type
-                        previous_direction,                                       # $13 previous_direction
-                        self.generate_summary(ctx),                               # $14 summary
-                        json.dumps(signal_factors),                               # $15 key_reasons (or signal_factors)
-                        json.dumps(signal_factors),                               # $16 signal_factors
-                        ctx.smc.current_bias if ctx.smc else None,               # $17 smc_bias
-                        to_python(t.pivot if t else None),                        # $18 pivot_daily
-                        float(support_levels[0]['price']) if support_levels else None,  # $19 nearest_support
-                        float(resistance_levels[0]['price']) if resistance_levels else None  # $20 nearest_resistance
-                    )
-                    logger.info("✅ Signal successfully inserted into market_signals")
+                            ctx.timestamp, signal.signal_type.value, signal.direction, to_python(signal.confidence),
+                            to_python(ctx.current_price),
+                            to_python(signal.setup.entry if signal.setup else None),
+                            to_python(signal.setup.stop_loss if signal.setup else None),
+                            to_python(signal.setup.take_profit_1 if signal.setup else None),
+                            to_python(signal.setup.take_profit_2 if signal.setup else None),
+                            to_python(signal.setup.take_profit_3 if signal.setup else None),
+                            to_python(signal.setup.risk_reward_ratio if signal.setup else None),
+                            previous_type, previous_direction, self.generate_summary(ctx),
+                            json.dumps(signal_factors), json.dumps(signal_factors),
+                            ctx.smc.current_bias if ctx.smc else None, to_python(t.pivot if t else None),
+                            float(support_levels[0]['price']) if support_levels else None,
+                            float(resistance_levels[0]['price']) if resistance_levels else None
+                        )
+                        logger.info("✅ Signal inserted")
                                 
         except Exception as e:
             logger.error(f"Error saving analysis: {e}")
+            import traceback
+            traceback.print_exc()
         
     def get_price_zone(self, ctx: MarketContext) -> str:
         """Get current price zone from SMC analysis."""

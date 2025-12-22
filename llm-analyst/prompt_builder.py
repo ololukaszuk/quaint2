@@ -1,8 +1,12 @@
 """
-Prompt Builder for Market Analysis
+Prompt Builder for Market Analysis v2.0
 
 Constructs structured prompts for LLM analysis based on enhanced market data.
-Now includes all data from the enhanced market_analysis schema (v2.0).
+Now includes:
+- All 5 pivot methods (Traditional, Fibonacci, Camarilla, Woodie, DeMark)
+- Self-assessment from past predictions
+- Clear understanding that analysis runs after X candle closes
+- Predictions for +1hr and +4hrs from prediction moment
 """
 
 from datetime import datetime
@@ -10,47 +14,57 @@ from typing import Dict, List, Any, Optional
 import json
 
 
-SYSTEM_PROMPT = """You are a senior cryptocurrency market analyst specializing in BTCUSDT technical analysis.
+def build_system_prompt(analysis_interval_candles: int = 5) -> str:
+    """Build system prompt with context about timing."""
+    return f"""You are a senior cryptocurrency market analyst specializing in BTCUSDT short-term price prediction.
+
+CRITICAL CONTEXT - READ CAREFULLY:
+- You analyze after every {analysis_interval_candles} closed 1-minute candles
+- Your predictions are for +1 HOUR and +4 HOURS from NOW
+- This is SHORT-TERM prediction - small moves matter (0.2-2% is significant)
+- Price action and momentum in the last few minutes are CRITICAL indicators
 
 Your role:
-- Analyze price action, trends, and market structure
-- Identify key support/resistance levels
-- Predict short-term price direction with confidence assessment
-- Provide clear, actionable insights
+- Predict the MOST LIKELY price direction in the next 1-4 hours
+- Give specific price targets (not vague ranges)
+- Be DECISIVE - avoid excessive hedging
+- Take a clear stance based on the data
 
 You receive comprehensive market data including:
-- Multi-timeframe trend analysis
-- Smart Money Concepts (SMC) data: order blocks, FVGs, structure breaks, liquidity pools
-- Multiple pivot point methods (Traditional, Fibonacci, Camarilla) with confluence zones
-- Weighted signal factors from the market analyzer
-- Momentum indicators across all timeframes
-- Active warnings and risk alerts
+- Multi-timeframe trend analysis (5m, 15m, 1h, 4h)
+- Smart Money Concepts (SMC): order blocks, FVGs, structure breaks, liquidity pools
+- 5 pivot point methods with confluence zones
+- Weighted signal factors from market analyzer
+- Momentum indicators (RSI, volume, taker buy ratio)
+- Recent price action (last 15-30 candles)
 
-Rules:
-- Be concise and direct (max 300 words)
-- Always state your prediction direction (BULLISH/BEARISH/NEUTRAL)
-- Give confidence level (HIGH/MEDIUM/LOW)
-- Mention specific price levels
-- Consider the SMC bias and smart money positioning
-- Pay attention to warnings - they highlight key risks
-- Explain your reasoning briefly
-- Do NOT hedge excessively - take a stance based on the data"""
+RESPONSE RULES:
+- Be concise (max 300 words)
+- ALWAYS state direction: BULLISH / BEARISH / NEUTRAL
+- ALWAYS give confidence: HIGH / MEDIUM / LOW
+- ALWAYS give specific price targets for 1h and 4h
+- ALWAYS specify support, resistance, and invalidation levels
+- If bullish: invalidation should be BELOW current price
+- If bearish: invalidation should be ABOVE current price
+- Explain your reasoning briefly but clearly
+
+DO NOT:
+- Hedge excessively ("could go either way")
+- Give wide price ranges ("somewhere between X and Y")
+- Skip any required sections
+- Contradict yourself (e.g., bullish prediction with bearish invalidation)"""
 
 
-def format_candles_for_prompt(candles: List[Dict[str, Any]], timeframe: str) -> str:
-    """
-    Format candles into a compact string for the prompt.
-    
-    Format: time|O|H|L|C|V
-    """
+def format_candles_for_prompt(candles: List[Dict[str, Any]], timeframe: str, limit: int = 30) -> str:
+    """Format candles into a compact string for the prompt."""
     if not candles:
         return f"No {timeframe} candle data available."
     
-    lines = [f"{timeframe} CANDLES (recent {len(candles)}):"]
+    lines = [f"{timeframe} CANDLES (recent {min(len(candles), limit)}):"]
     lines.append("Time | Open | High | Low | Close | Volume")
     lines.append("-" * 60)
     
-    for candle in candles[-30:]:  # Only show last 30 in detail
+    for candle in candles[-limit:]:
         time_str = candle['open_time'].strftime('%m-%d %H:%M') if isinstance(candle['open_time'], datetime) else str(candle['open_time'])[:16]
         lines.append(
             f"{time_str} | {float(candle['open']):,.0f} | {float(candle['high']):,.0f} | "
@@ -65,14 +79,13 @@ def format_candles_for_prompt(candles: List[Dict[str, Any]], timeframe: str) -> 
         
         lines.append("")
         lines.append(f"Period High: ${max(highs):,.0f} | Period Low: ${min(lows):,.0f}")
-        lines.append(f"Range: ${max(highs) - min(lows):,.0f} ({(max(highs) - min(lows)) / min(lows) * 100:.1f}%)")
+        lines.append(f"Range: ${max(highs) - min(lows):,.0f} ({(max(highs) - min(lows)) / min(lows) * 100:.2f}%)")
         
-        # Simple trend
-        if len(closes) >= 20:
-            sma_20 = sum(closes[-20:]) / 20
-            current = closes[-1]
-            trend = "ABOVE" if current > sma_20 else "BELOW"
-            lines.append(f"Price vs SMA20: {trend} (SMA20: ${sma_20:,.0f})")
+        # Recent momentum
+        if len(closes) >= 5:
+            recent_change = (closes[-1] - closes[-5]) / closes[-5] * 100
+            direction = "UP" if recent_change > 0 else "DOWN"
+            lines.append(f"Last 5 candles: {direction} {abs(recent_change):.2f}%")
     
     return "\n".join(lines)
 
@@ -85,85 +98,132 @@ def format_signal_factors(factors: Optional[List[Dict[str, Any]]]) -> str:
     lines = ["SIGNAL FACTORS (weighted reasons):"]
     lines.append("-" * 40)
     
-    # Sort by absolute weight
     sorted_factors = sorted(factors, key=lambda x: abs(x.get('weight', 0)), reverse=True)
     
     bullish_total = 0
     bearish_total = 0
     
-    for factor in sorted_factors[:10]:  # Top 10 factors
-        # Handle both dict and string formats
+    for factor in sorted_factors[:10]:
         if isinstance(factor, dict):
-            weight = int(factor.get('weight', 0))  # Convert to int for formatting
+            weight = float(factor.get('weight', 0))
             desc = factor.get('description', 'Unknown')
-        elif isinstance(factor, str):
-            weight = 0
-            desc = factor
         else:
             weight = 0
             desc = str(factor)
         
         if weight > 0:
             bullish_total += weight
-            symbol = "ðŸŸ¢"
+            symbol = "🟢"
         elif weight < 0:
             bearish_total += abs(weight)
-            symbol = "ðŸ”´"
+            symbol = "🔴"
         else:
-            symbol = "âšª"
+            symbol = "⚪"
         
-        lines.append(f"  {symbol} {weight:+3d} | {desc}")
+        lines.append(f"  {symbol} {weight:+.2f} | {desc}")
     
     lines.append("")
-    lines.append(f"Bullish weight: +{int(bullish_total)} | Bearish weight: -{int(bearish_total)}")
-    net_bias = int(bullish_total - bearish_total)
-    lines.append(f"Net bias: {'BULLISH' if bullish_total > bearish_total else 'BEARISH' if bearish_total > bullish_total else 'NEUTRAL'} ({net_bias:+d})")
+    lines.append(f"Bullish weight: +{bullish_total:.2f} | Bearish weight: -{bearish_total:.2f}")
+    net_bias = bullish_total - bearish_total
+    bias_str = 'BULLISH' if net_bias > 0.1 else 'BEARISH' if net_bias < -0.1 else 'NEUTRAL'
+    lines.append(f"Net bias: {bias_str} ({net_bias:+.2f})")
     
     return "\n".join(lines)
 
 
-def format_pivot_levels(analysis: Dict[str, Any]) -> str:
-    """Format all pivot levels from different methods."""
-    lines = ["PIVOT POINTS:"]
-    lines.append("-" * 40)
+def format_all_pivot_levels(analysis: Dict[str, Any]) -> str:
+    """Format all 5 pivot methods with complete levels."""
+    lines = ["PIVOT POINTS (5 Methods):"]
+    lines.append("-" * 60)
     
     # Daily pivot (main reference)
     pivot = analysis.get('pivot_daily') or analysis.get('daily_pivot')
     if pivot:
         price_vs = analysis.get('price_vs_pivot', 'N/A')
         lines.append(f"Daily Pivot: ${float(pivot):,.0f} (price {price_vs})")
+        lines.append("")
     
     # Traditional pivots
-    trad_levels = []
-    for level in ['r3', 'r2', 'r1', 's1', 's2', 's3']:
+    lines.append("TRADITIONAL:")
+    trad_r = []
+    trad_s = []
+    for level in ['r3', 'r2', 'r1']:
         key = f'pivot_{level}_traditional'
         if analysis.get(key):
-            trad_levels.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
-    
-    if trad_levels:
-        lines.append(f"Traditional: {' | '.join(trad_levels)}")
+            trad_r.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+    for level in ['s1', 's2', 's3']:
+        key = f'pivot_{level}_traditional'
+        if analysis.get(key):
+            trad_s.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+    if trad_r or trad_s:
+        lines.append(f"  Resistance: {' | '.join(trad_r)}")
+        lines.append(f"  Support:    {' | '.join(trad_s)}")
     
     # Fibonacci pivots
-    fib_levels = []
-    for level in ['r3', 'r2', 'r1', 's1', 's2', 's3']:
+    lines.append("FIBONACCI:")
+    fib_r = []
+    fib_s = []
+    for level in ['r3', 'r2', 'r1']:
         key = f'pivot_{level}_fibonacci'
         if analysis.get(key):
-            fib_levels.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+            fib_r.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+    for level in ['s1', 's2', 's3']:
+        key = f'pivot_{level}_fibonacci'
+        if analysis.get(key):
+            fib_s.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+    if fib_r or fib_s:
+        lines.append(f"  Resistance: {' | '.join(fib_r)}")
+        lines.append(f"  Support:    {' | '.join(fib_s)}")
     
-    if fib_levels:
-        lines.append(f"Fibonacci: {' | '.join(fib_levels)}")
-    
-    # Camarilla pivots (key breakout levels)
-    cam_levels = []
-    for level in ['r4', 'r3', 's3', 's4']:
+    # Camarilla pivots (complete R1-R4, S1-S4)
+    lines.append("CAMARILLA (intraday breakout levels):")
+    cam_r = []
+    cam_s = []
+    for level in ['r4', 'r3', 'r2', 'r1']:
         key = f'pivot_{level}_camarilla'
         if analysis.get(key):
-            cam_levels.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+            cam_r.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+    for level in ['s1', 's2', 's3', 's4']:
+        key = f'pivot_{level}_camarilla'
+        if analysis.get(key):
+            cam_s.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+    if cam_r or cam_s:
+        lines.append(f"  Resistance: {' | '.join(cam_r)}")
+        lines.append(f"  Support:    {' | '.join(cam_s)}")
+        lines.append("  Note: R3/S3 = key breakout levels, R4/S4 = extended targets")
     
-    if cam_levels:
-        lines.append(f"Camarilla: {' | '.join(cam_levels)}")
+    # Woodie pivots
+    lines.append("WOODIE (trend-following):")
+    woodie_pivot = analysis.get('pivot_woodie')
+    woodie_r = []
+    woodie_s = []
+    for level in ['r3', 'r2', 'r1']:
+        key = f'pivot_{level}_woodie'
+        if analysis.get(key):
+            woodie_r.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+    for level in ['s1', 's2', 's3']:
+        key = f'pivot_{level}_woodie'
+        if analysis.get(key):
+            woodie_s.append(f"{level.upper()}: ${float(analysis[key]):,.0f}")
+    if woodie_pivot:
+        lines.append(f"  Pivot: ${float(woodie_pivot):,.0f}")
+    if woodie_r or woodie_s:
+        lines.append(f"  Resistance: {' | '.join(woodie_r)}")
+        lines.append(f"  Support:    {' | '.join(woodie_s)}")
     
-    # Confluence zones (where multiple methods agree)
+    # DeMark pivots
+    lines.append("DEMARK (condition-based):")
+    demark_pivot = analysis.get('pivot_demark')
+    demark_r1 = analysis.get('pivot_r1_demark')
+    demark_s1 = analysis.get('pivot_s1_demark')
+    if demark_pivot:
+        lines.append(f"  Pivot: ${float(demark_pivot):,.0f}")
+    if demark_r1:
+        lines.append(f"  Resistance (R1): ${float(demark_r1):,.0f}")
+    if demark_s1:
+        lines.append(f"  Support (S1): ${float(demark_s1):,.0f}")
+    
+    # Confluence zones
     confluence = analysis.get('pivot_confluence_zones')
     if confluence:
         if isinstance(confluence, str):
@@ -174,8 +234,8 @@ def format_pivot_levels(analysis: Dict[str, Any]) -> str:
         
         if confluence and isinstance(confluence, list):
             lines.append("")
-            lines.append("Confluence Zones (multiple methods agree):")
-            for zone in confluence[:5]:  # Top 5 confluence zones
+            lines.append("CONFLUENCE ZONES (multiple methods agree):")
+            for zone in confluence[:5]:
                 if isinstance(zone, dict):
                     zone_type = zone.get('type', 'unknown')
                     price = zone.get('price', 0)
@@ -185,11 +245,10 @@ def format_pivot_levels(analysis: Dict[str, Any]) -> str:
                         methods_str = ', '.join(str(m) for m in methods)
                     else:
                         methods_str = str(methods)
-                    lines.append(f"  â€¢ {zone_type.upper()} ${float(price):,.0f} (strength: {float(strength):.0%}, methods: {methods_str})")
-                elif isinstance(zone, str):
-                    lines.append(f"  â€¢ {zone}")
+                    symbol = "🔴" if zone_type == "resistance" else "🟢"
+                    lines.append(f"  {symbol} {zone_type.upper()} ${float(price):,.0f} (strength: {float(strength):.0%}, methods: {methods_str})")
     
-    return "\n".join(lines) if len(lines) > 2 else "No pivot data available."
+    return "\n".join(lines) if len(lines) > 3 else "No pivot data available."
 
 
 def format_smc_data(analysis: Dict[str, Any]) -> str:
@@ -197,14 +256,15 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
     lines = ["SMART MONEY CONCEPTS (SMC):"]
     lines.append("-" * 40)
     
-    # Basic SMC info
     smc_bias = analysis.get('smc_bias')
     if smc_bias:
-        lines.append(f"SMC Bias: {smc_bias}")
+        bias_emoji = "🟢" if smc_bias == "BULLISH" else "🔴" if smc_bias == "BEARISH" else "🟡"
+        lines.append(f"SMC Bias: {bias_emoji} {smc_bias}")
     
     price_zone = analysis.get('smc_price_zone') or analysis.get('price_zone')
     if price_zone:
-        lines.append(f"Price Zone: {price_zone}")
+        zone_emoji = "🟢" if price_zone == "DISCOUNT" else "🔴" if price_zone == "PREMIUM" else "🟡"
+        lines.append(f"Price Zone: {zone_emoji} {price_zone}")
     
     equilibrium = analysis.get('smc_equilibrium') or analysis.get('equilibrium_price')
     if equilibrium:
@@ -221,19 +281,17 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
         
         if order_blocks and isinstance(order_blocks, list):
             lines.append("")
-            lines.append("Active Order Blocks:")
-            for ob in order_blocks[:5]:  # Top 5
+            lines.append("Order Blocks:")
+            for ob in order_blocks[:4]:
                 if isinstance(ob, dict):
                     ob_type = ob.get('type', 'unknown')
                     low = ob.get('low', 0)
                     high = ob.get('high', 0)
-                    strength = float(ob.get('strength', 0))
-                    dist = float(ob.get('distance_pct', 0))
-                    lines.append(f"  â€¢ {ob_type.upper()} OB: ${float(low):,.0f}-${float(high):,.0f} (strength: {strength:.0%}, {dist:.1f}% away)")
-                elif isinstance(ob, str):
-                    lines.append(f"  â€¢ {ob}")
+                    strength = ob.get('strength', 0)
+                    symbol = "🟢" if ob_type == "bullish" else "🔴"
+                    lines.append(f"  {symbol} {ob_type.upper()}: ${float(low):,.0f} - ${float(high):,.0f} (strength: {float(strength):.0%})")
     
-    # Fair Value Gaps
+    # FVGs
     fvgs = analysis.get('smc_fvgs')
     if fvgs:
         if isinstance(fvgs, str):
@@ -243,18 +301,19 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
                 fvgs = None
         
         if fvgs and isinstance(fvgs, list):
-            # Filter unfilled - handle both dict and non-dict items
-            unfilled = [f for f in fvgs if isinstance(f, dict) and f.get('unfilled', True)]
-            if unfilled:
-                lines.append("")
-                lines.append(f"Unfilled FVGs ({len(unfilled)}):")
-                for fvg in unfilled[:3]:  # Top 3
+            lines.append("")
+            lines.append("Fair Value Gaps (Imbalances):")
+            for fvg in fvgs[:4]:
+                if isinstance(fvg, dict):
                     fvg_type = fvg.get('type', 'unknown')
                     low = fvg.get('low', 0)
                     high = fvg.get('high', 0)
-                    lines.append(f"  â€¢ {fvg_type.upper()} FVG: ${float(low):,.0f}-${float(high):,.0f}")
+                    unfilled = fvg.get('unfilled', True)
+                    if unfilled:
+                        symbol = "🟢" if fvg_type == "bullish" else "🔴"
+                        lines.append(f"  {symbol} {fvg_type.upper()} FVG: ${float(low):,.0f} - ${float(high):,.0f} (UNFILLED)")
     
-    # Structure Breaks (BOS, CHoCH)
+    # Structure breaks
     breaks = analysis.get('smc_breaks')
     if breaks:
         if isinstance(breaks, str):
@@ -265,17 +324,16 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
         
         if breaks and isinstance(breaks, list):
             lines.append("")
-            lines.append("Recent Structure Breaks:")
-            for brk in breaks[:3]:  # Top 3
+            lines.append("Structure Breaks:")
+            for brk in breaks[-3:]:
                 if isinstance(brk, dict):
                     brk_type = brk.get('type', 'unknown')
                     direction = brk.get('direction', 'unknown')
                     price = brk.get('price', 0)
-                    lines.append(f"  â€¢ {brk_type} {direction} @ ${float(price):,.0f}")
-                elif isinstance(brk, str):
-                    lines.append(f"  â€¢ {brk}")
+                    symbol = "🟢" if direction == "BULLISH" else "🔴"
+                    lines.append(f"  {symbol} {brk_type}: {direction} at ${float(price):,.0f}")
     
-    # Liquidity Pools
+    # Liquidity
     liquidity = analysis.get('smc_liquidity')
     if liquidity:
         if isinstance(liquidity, str):
@@ -286,53 +344,40 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
         
         if liquidity and isinstance(liquidity, dict):
             lines.append("")
+            lines.append("Liquidity Pools (stop hunt targets):")
             buy_side = liquidity.get('buy_side', [])
             sell_side = liquidity.get('sell_side', [])
-            
             if buy_side:
-                buy_prices = [f"${float(p):,.0f}" for p in buy_side[:3]]
-                lines.append(f"Buy-side liquidity (stops above): {', '.join(buy_prices)}")
-            
+                levels = ", ".join([f"${float(l):,.0f}" for l in buy_side[:3]])
+                lines.append(f"  📈 Buy-side (above): {levels}")
             if sell_side:
-                sell_prices = [f"${float(p):,.0f}" for p in sell_side[:3]]
-                lines.append(f"Sell-side liquidity (stops below): {', '.join(sell_prices)}")
+                levels = ", ".join([f"${float(l):,.0f}" for l in sell_side[:3]])
+                lines.append(f"  📉 Sell-side (below): {levels}")
     
-    return "\n".join(lines) if len(lines) > 2 else "No SMC data available."
+    return "\n".join(lines)
 
 
 def format_support_resistance(analysis: Dict[str, Any]) -> str:
     """Format support and resistance levels."""
-    lines = ["SUPPORT & RESISTANCE LEVELS:"]
+    lines = ["SUPPORT/RESISTANCE LEVELS:"]
     lines.append("-" * 40)
     
-    # Enhanced levels (JSONB arrays)
-    support_levels = analysis.get('support_levels')
-    if support_levels:
-        if isinstance(support_levels, str):
-            try:
-                support_levels = json.loads(support_levels)
-            except:
-                support_levels = None
-        
-        if support_levels and isinstance(support_levels, list):
-            lines.append("Support Levels:")
-            for level in support_levels[:5]:  # Top 5
-                if isinstance(level, dict):
-                    price = level.get('price', 0)
-                    strength = float(level.get('strength', 0))
-                    touches = level.get('touches', 0)
-                    tf = level.get('timeframe', 'N/A')
-                    dist = float(level.get('distance_pct', 0))
-                    lines.append(f"  â€¢ ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
-                elif isinstance(level, str):
-                    lines.append(f"  â€¢ {level}")
-    else:
-        # Fall back to simple nearest support
-        if analysis.get('nearest_support'):
-            strength = analysis.get('support_strength', 0)
-            lines.append(f"Nearest Support: ${float(analysis['nearest_support']):,.0f} (strength: {float(strength) * 100:.0f}%)")
+    # Simple levels
+    nearest_sup = analysis.get('nearest_support')
+    nearest_res = analysis.get('nearest_resistance')
     
+    if nearest_res:
+        res_strength = analysis.get('resistance_strength', 0)
+        lines.append(f"Nearest Resistance: ${float(nearest_res):,.0f} (strength: {float(res_strength):.0%})")
+    
+    if nearest_sup:
+        sup_strength = analysis.get('support_strength', 0)
+        lines.append(f"Nearest Support: ${float(nearest_sup):,.0f} (strength: {float(sup_strength):.0%})")
+    
+    # Enhanced levels
+    support_levels = analysis.get('support_levels')
     resistance_levels = analysis.get('resistance_levels')
+    
     if resistance_levels:
         if isinstance(resistance_levels, str):
             try:
@@ -342,32 +387,54 @@ def format_support_resistance(analysis: Dict[str, Any]) -> str:
         
         if resistance_levels and isinstance(resistance_levels, list):
             lines.append("")
-            lines.append("Resistance Levels:")
-            for level in resistance_levels[:5]:  # Top 5
+            lines.append("All Resistance Levels:")
+            for level in resistance_levels[:3]:
                 if isinstance(level, dict):
                     price = level.get('price', 0)
-                    strength = float(level.get('strength', 0))
+                    strength = level.get('strength', 0)
                     touches = level.get('touches', 0)
-                    tf = level.get('timeframe', 'N/A')
-                    dist = float(level.get('distance_pct', 0))
-                    lines.append(f"  â€¢ ${float(price):,.0f} (strength: {strength:.0%}, touches: {touches}, TF: {tf}, {dist:.2f}% away)")
-                elif isinstance(level, str):
-                    lines.append(f"  â€¢ {level}")
-    else:
-        # Fall back to simple nearest resistance
-        if analysis.get('nearest_resistance'):
-            strength = analysis.get('resistance_strength', 0)
-            lines.append(f"Nearest Resistance: ${float(analysis['nearest_resistance']):,.0f} (strength: {float(strength) * 100:.0f}%)")
+                    dist = level.get('distance_pct', 0)
+                    lines.append(f"  🔴 ${float(price):,.0f} | +{float(dist):.2f}% | strength: {float(strength):.0%} | touches: {touches}")
     
-    return "\n".join(lines) if len(lines) > 2 else "No S/R data available."
+    if support_levels:
+        if isinstance(support_levels, str):
+            try:
+                support_levels = json.loads(support_levels)
+            except:
+                support_levels = None
+        
+        if support_levels and isinstance(support_levels, list):
+            lines.append("")
+            lines.append("All Support Levels:")
+            for level in support_levels[:3]:
+                if isinstance(level, dict):
+                    price = level.get('price', 0)
+                    strength = level.get('strength', 0)
+                    touches = level.get('touches', 0)
+                    dist = level.get('distance_pct', 0)
+                    lines.append(f"  🟢 ${float(price):,.0f} | -{float(dist):.2f}% | strength: {float(strength):.0%} | touches: {touches}")
+    
+    return "\n".join(lines)
 
 
 def format_momentum(analysis: Dict[str, Any]) -> str:
-    """Format momentum indicators for all timeframes."""
+    """Format momentum indicators."""
     lines = ["MOMENTUM INDICATORS:"]
     lines.append("-" * 40)
     
-    # Enhanced momentum (all timeframes as JSONB)
+    # Simple 1H indicators
+    rsi_1h = analysis.get('rsi_1h')
+    vol_1h = analysis.get('volume_ratio_1h')
+    
+    if rsi_1h:
+        rsi_status = "OVERSOLD 🟢" if rsi_1h < 30 else "OVERBOUGHT 🔴" if rsi_1h > 70 else "NEUTRAL"
+        lines.append(f"RSI 1H: {float(rsi_1h):.1f} ({rsi_status})")
+    
+    if vol_1h:
+        vol_status = "HIGH 📈" if vol_1h > 1.5 else "LOW 📉" if vol_1h < 0.5 else "NORMAL"
+        lines.append(f"Volume 1H: {float(vol_1h):.2f}x average ({vol_status})")
+    
+    # Enhanced momentum
     momentum = analysis.get('momentum')
     if momentum:
         if isinstance(momentum, str):
@@ -377,55 +444,53 @@ def format_momentum(analysis: Dict[str, Any]) -> str:
                 momentum = None
         
         if momentum and isinstance(momentum, dict):
-            for tf in ['5m', '15m', '1h', '4h', '1d']:
+            lines.append("")
+            for tf in ['5m', '15m', '1h', '4h']:
                 if tf in momentum:
-                    tf_data = momentum[tf]
-                    rsi = tf_data.get('rsi', 0)
-                    vol_ratio = tf_data.get('volume_ratio', 0)
-                    taker_buy = tf_data.get('taker_buy_ratio', 0.5)
-                    
-                    rsi_status = "OVERSOLD" if rsi < 30 else "OVERBOUGHT" if rsi > 70 else "NEUTRAL"
-                    
-                    lines.append(f"{tf}: RSI={rsi:.1f} ({rsi_status}), Vol={vol_ratio:.2f}x, TakerBuy={taker_buy:.0%}")
-    else:
-        # Fall back to single timeframe
-        if analysis.get('rsi_1h'):
-            rsi = float(analysis['rsi_1h'])
-            rsi_status = "OVERSOLD" if rsi < 30 else "OVERBOUGHT" if rsi > 70 else "NEUTRAL"
-            lines.append(f"RSI 1H: {rsi:.1f} ({rsi_status})")
-        
-        if analysis.get('volume_ratio_1h'):
-            lines.append(f"Volume Ratio 1H: {float(analysis['volume_ratio_1h']):.2f}x average")
+                    data = momentum[tf]
+                    if isinstance(data, dict):
+                        rsi = data.get('rsi', 0)
+                        vol = data.get('volume_ratio', 0)
+                        tbr = data.get('taker_buy_ratio', 0)
+                        
+                        rsi_emoji = "🟢" if rsi < 40 else "🔴" if rsi > 60 else "🟡"
+                        tbr_emoji = "🟢" if tbr > 0.55 else "🔴" if tbr < 0.45 else "🟡"
+                        
+                        lines.append(f"  {tf}: RSI {rsi_emoji}{float(rsi):.1f} | Vol {float(vol):.2f}x | Buyers {tbr_emoji}{float(tbr):.0%}")
     
-    return "\n".join(lines) if len(lines) > 2 else "No momentum data available."
+    return "\n".join(lines)
 
 
-def format_market_structure(analysis: Dict[str, Any]) -> str:
-    """Format market structure information."""
-    lines = ["MARKET STRUCTURE:"]
+def format_trends(analysis: Dict[str, Any]) -> str:
+    """Format multi-timeframe trends."""
+    lines = ["MULTI-TIMEFRAME TRENDS:"]
     lines.append("-" * 40)
     
-    pattern = analysis.get('structure_pattern')
-    if pattern:
-        lines.append(f"Pattern: {pattern}")
+    trends = analysis.get('trends')
+    if trends:
+        if isinstance(trends, str):
+            try:
+                trends = json.loads(trends)
+            except:
+                trends = None
+        
+        if trends and isinstance(trends, dict):
+            for tf in ['5m', '15m', '1h', '4h', '1d']:
+                if tf in trends:
+                    data = trends[tf]
+                    if isinstance(data, dict):
+                        direction = data.get('direction', 'N/A')
+                        strength = data.get('strength', 0)
+                        ema = data.get('ema', 'N/A')
+                        
+                        dir_emoji = "🟢" if direction == "UPTREND" else "🔴" if direction == "DOWNTREND" else "🟡"
+                        lines.append(f"  {tf:>4}: {dir_emoji} {direction:<12} | Strength: {float(strength):.0%} | EMA: {ema}")
     
-    last_high = analysis.get('structure_last_high')
-    last_low = analysis.get('structure_last_low')
-    
-    if last_high:
-        lines.append(f"Last Swing High: ${float(last_high):,.0f}")
-    if last_low:
-        lines.append(f"Last Swing Low: ${float(last_low):,.0f}")
-    
-    return "\n".join(lines) if len(lines) > 2 else ""
+    return "\n".join(lines)
 
 
 def format_warnings(analysis: Dict[str, Any]) -> str:
-    """Format active warnings and alerts.
-    
-    Note: Warnings are stored as list of strings in the database,
-    e.g. ["ðŸš« CLOSE TO STRONG SUPPORT ($87,556) - Short risky before break!"]
-    """
+    """Format warnings."""
     warnings = analysis.get('warnings')
     if not warnings:
         return ""
@@ -439,112 +504,124 @@ def format_warnings(analysis: Dict[str, Any]) -> str:
     if not warnings or not isinstance(warnings, list):
         return ""
     
-    lines = ["âš ï¸ ACTIVE WARNINGS:"]
+    lines = ["⚠️ WARNINGS:"]
     lines.append("-" * 40)
-    
-    for warning in warnings:
-        # Warnings are stored as strings
+    for warning in warnings[:5]:
         if isinstance(warning, str):
-            lines.append(f"  {warning}")
+            lines.append(f"  • {warning}")
         elif isinstance(warning, dict):
-            # Fallback for dict format (future compatibility)
-            msg = warning.get('message', warning.get('type', 'Unknown warning'))
-            lines.append(f"  {msg}")
+            msg = warning.get('message', str(warning))
+            lines.append(f"  • {msg}")
+    
+    return "\n".join(lines)
+
+
+def format_past_predictions(past_analyses: List[Dict[str, Any]]) -> str:
+    """Format past prediction performance for self-assessment."""
+    if not past_analyses:
+        return "No past predictions available for self-assessment."
+    
+    lines = ["SELF-ASSESSMENT (Your Recent Predictions):"]
+    lines.append("-" * 60)
+    lines.append("Review your past predictions to improve accuracy:")
+    lines.append("")
+    
+    correct_count = 0
+    total_count = 0
+    
+    for analysis in past_analyses[:10]:
+        time_str = analysis['analysis_time'].strftime('%m-%d %H:%M') if isinstance(analysis['analysis_time'], datetime) else str(analysis['analysis_time'])[:16]
+        direction = analysis.get('prediction_direction', 'N/A')
+        confidence = analysis.get('prediction_confidence', 'N/A')
+        price_at_prediction = float(analysis.get('price', 0))
+        predicted_1h = analysis.get('predicted_price_1h')
+        actual_1h = analysis.get('actual_price_1h')
+        correct_1h = analysis.get('direction_correct_1h')
+        
+        # Build line
+        line = f"  {time_str}: {direction} ({confidence}) @ ${price_at_prediction:,.0f}"
+        
+        if actual_1h and predicted_1h:
+            pred_dir = "UP" if predicted_1h > price_at_prediction else "DOWN"
+            actual_dir = "UP" if actual_1h > price_at_prediction else "DOWN"
+            result = "✅" if correct_1h else "❌"
+            line += f" → Predicted: ${float(predicted_1h):,.0f} ({pred_dir})"
+            line += f" | Actual: ${float(actual_1h):,.0f} ({actual_dir}) {result}"
+            
+            total_count += 1
+            if correct_1h:
+                correct_count += 1
+        
+        lines.append(line)
+    
+    if total_count > 0:
+        accuracy = correct_count / total_count * 100
+        lines.append("")
+        lines.append(f"Direction Accuracy (1H): {correct_count}/{total_count} ({accuracy:.0f}%)")
+        
+        if accuracy < 50:
+            lines.append("⚠️ Accuracy below 50% - Consider being more conservative or reversing bias")
+        elif accuracy < 60:
+            lines.append("📊 Accuracy moderate - Focus on high-confidence setups only")
+        else:
+            lines.append("✅ Good accuracy - Maintain current approach")
     
     return "\n".join(lines)
 
 
 def format_market_analysis(analysis: Optional[Dict[str, Any]]) -> str:
-    """Format complete market-analyzer output for the prompt."""
+    """Format complete market analysis data."""
     if not analysis:
         return "No market analysis data available."
     
-    lines = ["=" * 60]
-    lines.append("MARKET ANALYZER OUTPUT (Enhanced)")
-    lines.append("=" * 60)
+    lines = []
     
-    # Basic signal info
-    lines.append("")
-    lines.append("CURRENT SIGNAL:")
-    lines.append("-" * 40)
-    lines.append(f"Signal: {analysis.get('signal_type', 'N/A')} ({analysis.get('signal_direction', 'N/A')})")
-    lines.append(f"Confidence: {analysis.get('signal_confidence', 0):.0f}%")
-    lines.append(f"Current Price: ${float(analysis.get('price', 0)):,.2f}")
+    # Current signal
+    signal_type = analysis.get('signal_type')
+    signal_direction = analysis.get('signal_direction')
+    signal_confidence = analysis.get('signal_confidence')
     
-    action = analysis.get('action_recommendation')
-    if action:
-        lines.append(f"Action Recommendation: {action}")
-    
-    # Trade setup if available
-    if analysis.get('entry_price') and analysis.get('signal_direction') != 'NONE':
+    if signal_type:
+        dir_emoji = "🟢" if signal_direction == "LONG" else "🔴" if signal_direction == "SHORT" else "🟡"
+        lines.append(f"MARKET ANALYZER SIGNAL: {dir_emoji} {signal_type} ({signal_direction})")
+        lines.append(f"Confidence: {float(signal_confidence):.0f}%")
         lines.append("")
-        lines.append("TRADE SETUP:")
-        lines.append(f"  Entry: ${float(analysis['entry_price']):,.0f}")
-        if analysis.get('stop_loss'):
-            lines.append(f"  Stop Loss: ${float(analysis['stop_loss']):,.0f}")
-        if analysis.get('take_profit_1'):
-            lines.append(f"  TP1: ${float(analysis['take_profit_1']):,.0f}")
-        if analysis.get('take_profit_2'):
-            lines.append(f"  TP2: ${float(analysis['take_profit_2']):,.0f}")
-        if analysis.get('risk_reward_ratio'):
-            lines.append(f"  R:R: {float(analysis['risk_reward_ratio']):.2f}")
     
     # Signal factors
     signal_factors = analysis.get('signal_factors')
     if signal_factors:
-        lines.append("")
+        if isinstance(signal_factors, str):
+            try:
+                signal_factors = json.loads(signal_factors)
+            except:
+                signal_factors = None
         lines.append(format_signal_factors(signal_factors))
+        lines.append("")
     
     # Trends
-    trends = analysis.get('trends')
-    if trends:
-        if isinstance(trends, str):
-            try:
-                trends = json.loads(trends)
-            except:
-                trends = None
-        
-        if trends and isinstance(trends, dict):
-            lines.append("")
-            lines.append("MULTI-TIMEFRAME TRENDS:")
-            lines.append("-" * 40)
-            
-            for tf in ['5m', '15m', '1h', '4h', '1d']:
-                if tf in trends:
-                    data = trends[tf]
-                    if isinstance(data, dict):
-                        direction = data.get('direction', 'N/A')
-                        strength = data.get('strength', 0)
-                        ema_bias = data.get('ema_bias', 'N/A')
-                        lines.append(f"  {tf}: {direction} ({strength:.0%}) | EMA: {ema_bias}")
+    lines.append(format_trends(analysis))
+    lines.append("")
     
     # Support/Resistance
-    lines.append("")
     lines.append(format_support_resistance(analysis))
-    
-    # Pivot levels
     lines.append("")
-    lines.append(format_pivot_levels(analysis))
+    
+    # Pivot levels (ALL 5 methods)
+    lines.append(format_all_pivot_levels(analysis))
+    lines.append("")
     
     # SMC data
-    lines.append("")
     lines.append(format_smc_data(analysis))
+    lines.append("")
     
     # Momentum
-    lines.append("")
     lines.append(format_momentum(analysis))
     
-    # Market structure
-    structure = format_market_structure(analysis)
-    if structure:
-        lines.append("")
-        lines.append(structure)
-    
     # Warnings
-    warnings = format_warnings(analysis)
-    if warnings:
+    warnings_str = format_warnings(analysis)
+    if warnings_str:
         lines.append("")
-        lines.append(warnings)
+        lines.append(warnings_str)
     
     return "\n".join(lines)
 
@@ -557,47 +634,15 @@ def format_signal_history(signals: List[Dict[str, Any]]) -> str:
     lines = ["RECENT SIGNAL CHANGES:"]
     lines.append("-" * 40)
     
-    for sig in signals[:10]:  # Last 10 signals
+    for sig in signals[:10]:
         time_str = sig['signal_time'].strftime('%m-%d %H:%M') if isinstance(sig['signal_time'], datetime) else str(sig['signal_time'])[:16]
         prev = sig.get('previous_signal_type', 'N/A')
         current = sig.get('signal_type', 'N/A')
         direction = sig.get('signal_direction', 'N/A')
         price = float(sig.get('price', 0))
         
-        lines.append(f"{time_str}: {prev} â†’ {current} ({direction}) @ ${price:,.0f}")
-        
-        # Show key reasons if available (enhanced)
-        key_reasons = sig.get('key_reasons')
-        if key_reasons:
-            if isinstance(key_reasons, str):
-                try:
-                    key_reasons = json.loads(key_reasons)
-                except:
-                    key_reasons = None
-            
-            if key_reasons and isinstance(key_reasons, list):
-                for reason in key_reasons[:2]:  # Top 2 reasons per signal
-                    if isinstance(reason, dict):
-                        desc = reason.get('description', str(reason))
-                        weight = int(reason.get('weight', 0))
-                        lines.append(f"    â†’ {desc} ({weight:+d})")
-                    else:
-                        lines.append(f"    â†’ {reason}")
-    
-    # Calculate signal stability
-    if len(signals) >= 3:
-        time_span = signals[0]['signal_time'] - signals[-1]['signal_time']
-        hours = time_span.total_seconds() / 3600
-        changes_per_hour = len(signals) / hours if hours > 0 else 0
-        
-        if changes_per_hour > 2:
-            stability = "UNSTABLE (frequent changes)"
-        elif changes_per_hour > 0.5:
-            stability = "MODERATE"
-        else:
-            stability = "STABLE"
-        
-        lines.append(f"\nSignal Stability: {stability} ({len(signals)} changes in {hours:.1f}h)")
+        dir_emoji = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "🟡"
+        lines.append(f"{time_str}: {prev} → {current} ({dir_emoji}{direction}) @ ${price:,.0f}")
     
     return "\n".join(lines)
 
@@ -608,6 +653,8 @@ def build_analysis_prompt(
     market_analysis: Optional[Dict[str, Any]],
     signal_history: List[Dict[str, Any]],
     current_price: float,
+    past_predictions: Optional[List[Dict[str, Any]]] = None,
+    analysis_interval_candles: int = 5,
 ) -> str:
     """
     Build the complete analysis prompt with enhanced market data.
@@ -618,20 +665,29 @@ def build_analysis_prompt(
         market_analysis: Latest market-analyzer output (enhanced schema)
         signal_history: Recent signal changes
         current_price: Current BTC price
+        past_predictions: Past LLM predictions for self-assessment
+        analysis_interval_candles: How many 1m candles between analyses
         
     Returns:
         Complete prompt string
     """
     sections = []
     
-    # Header
+    # Header with timing context
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')
     sections.append(f"{'='*70}")
-    sections.append(f"BTCUSDT COMPREHENSIVE MARKET ANALYSIS REQUEST")
+    sections.append(f"BTCUSDT SHORT-TERM PRICE PREDICTION REQUEST")
     sections.append(f"{'='*70}")
     sections.append(f"Timestamp: {timestamp}")
     sections.append(f"Current Price: ${current_price:,.2f}")
+    sections.append(f"Analysis triggers every {analysis_interval_candles} closed 1m candles")
+    sections.append(f"You are predicting price at +1 HOUR and +4 HOURS from NOW")
     sections.append("")
+    
+    # Self-assessment from past predictions (if available)
+    if past_predictions:
+        sections.append(format_past_predictions(past_predictions))
+        sections.append("")
     
     # Market Analyzer Output (most important - put first)
     sections.append(format_market_analysis(market_analysis))
@@ -641,22 +697,22 @@ def build_analysis_prompt(
     sections.append(format_signal_history(signal_history))
     sections.append("")
     
-    # 1H Candles (main data)
-    sections.append(format_candles_for_prompt(candles_1h, "1H"))
+    # 1H Candles
+    sections.append(format_candles_for_prompt(candles_1h, "1H", limit=30))
     sections.append("")
     
-    # 15M Candles (recent detail)
-    sections.append(format_candles_for_prompt(candles_15m, "15M"))
+    # 15M Candles
+    sections.append(format_candles_for_prompt(candles_15m, "15M", limit=20))
     sections.append("")
     
-    # Request
+    # Request with strict format
     sections.append("=" * 70)
     sections.append("""
 ANALYSIS REQUEST:
 
-Based on ALL the data above (signal factors, SMC, pivots, S/R, momentum, structure, warnings), provide:
+Based on ALL the data above, provide your SHORT-TERM prediction:
 
-**IMPORTANT: You MUST use this EXACT format for your response:**
+**IMPORTANT: Use this EXACT format:**
 
 ### 1. DIRECTION PREDICTION
 - Direction: [BULLISH / BEARISH / NEUTRAL]
@@ -665,47 +721,31 @@ Based on ALL the data above (signal factors, SMC, pivots, S/R, momentum, structu
 ### 2. PRICE TARGETS
 - Expected price in 1 hour: $XX,XXX
 - Expected price in 4 hours: $XX,XXX
-- Key invalidation level: $XX,XXX (if broken [below/above])
+- Key invalidation level: $XX,XXX (if broken [below/above], prediction is wrong)
 
 ### 3. KEY LEVELS TO WATCH
 - Critical support: $XX,XXX
 - Critical resistance: $XX,XXX
 
 ### 4. BRIEF REASONING
-[Your 3-4 sentence analysis here]
+[Your 3-4 sentence analysis explaining WHY you expect this direction]
 - Reference the weighted signal factors
-- Consider SMC bias and liquidity targets
-- Note any relevant warnings
-- Explain your directional bias
+- Consider SMC bias and price zone
+- Note any warnings
+- Consider your past prediction accuracy
 
-**CRITICAL FORMATTING RULES:**
-✅ DO use the section headers EXACTLY as shown (with ### and numbers)
-✅ DO use bullet points with "-" for each item
-✅ DO include dollar signs before prices: $87,500
-✅ DO specify direction words in all caps: BULLISH, BEARISH, NEUTRAL
-✅ DO be specific with numbers - avoid vague terms
-
-❌ DON'T use different section names or formats
-❌ DON'T skip any sections
-❌ DON'T use markdown tables or code blocks
-❌ DON'T hedge excessively - take a clear stance based on the data
-
-Example of correct format:
-### 1. DIRECTION PREDICTION
-- Direction: BULLISH
-- Confidence: MEDIUM
-
-### 2. PRICE TARGETS
-- Expected price in 1 hour: $87,500
-- Expected price in 4 hours: $87,900
-- Key invalidation level: $87,200 (if broken below)
-
-### 3. KEY LEVELS TO WATCH
-- Critical support: $87,100
-- Critical resistance: $87,800
-
-### 4. BRIEF REASONING
-The market shows bullish signal factors (+30 from CHoCH) outweighing bearish resistance proximity. SMC bias is BULLISH with price in DISCOUNT zone, suggesting institutional buying. However, 4h downtrend and low volume warrant caution, keeping confidence at MEDIUM.
+**CRITICAL RULES:**
+✅ If BULLISH: invalidation should be BELOW current price
+✅ If BEARISH: invalidation should be ABOVE current price
+✅ Be specific with prices (not ranges)
+✅ Base 1h/4h targets on S/R levels and pivot points
+❌ Don't skip sections
+❌ Don't hedge excessively
+❌ Don't contradict yourself
 """)
     
     return "\n".join(sections)
+
+
+# Export system prompt builder
+SYSTEM_PROMPT = build_system_prompt(5)  # Default 5 candles

@@ -1,8 +1,9 @@
 """
-Database access for LLM Analyst.
+Database access for LLM Analyst v2.0
 
-Fetches candles, market analysis (enhanced), and signal history.
+Fetches candles, market analysis (enhanced with all pivot methods), and signal history.
 Saves LLM analysis with full logging details.
+Includes past prediction retrieval for self-assessment.
 """
 
 import asyncio
@@ -68,11 +69,7 @@ class Database:
             return row['time'] if row else None
     
     async def get_candles_1h(self, limit: int = 120) -> List[Dict[str, Any]]:
-        """
-        Get aggregated 1H candles from 1m data.
-        
-        Returns list of dicts with: time, open, high, low, close, volume
-        """
+        """Get aggregated 1H candles from 1m data."""
         if not self.pool:
             return []
         
@@ -94,16 +91,10 @@ class Database:
                 """,
                 limit
             )
-            
-            # Return in chronological order
             return [dict(row) for row in reversed(rows)]
     
     async def get_candles_15m(self, limit: int = 20) -> List[Dict[str, Any]]:
-        """
-        Get aggregated 15m candles from 1m data.
-        
-        Returns list of dicts with: time, open, high, low, close, volume
-        """
+        """Get aggregated 15m candles from 1m data."""
         if not self.pool:
             return []
         
@@ -125,25 +116,12 @@ class Database:
                 """,
                 limit
             )
-            
             return [dict(row) for row in reversed(rows)]
     
     async def get_latest_market_analysis(self) -> Optional[Dict[str, Any]]:
         """
-        Get the most recent market analysis with ALL enriched data from enhanced schema.
-        
-        This includes:
-        - Basic signal info (type, direction, confidence)
-        - Trade setup (entry, SL, TPs)
-        - Signal factors (weighted reasons)
-        - All pivot levels (Traditional, Fibonacci, Camarilla)
-        - Pivot confluence zones
-        - Complete SMC data (order blocks, FVGs, breaks, liquidity)
-        - Support/Resistance levels with metadata
-        - Momentum for all timeframes
-        - Market structure
-        - Warnings
-        - Action recommendation
+        Get the most recent market analysis with ALL enriched data including
+        complete pivot points from all 5 methods.
         """
         if not self.pool:
             return None
@@ -171,22 +149,18 @@ class Database:
                         -- Trends (multi-timeframe)
                         trends,
                         
-                        -- Original S/R (may be NULL in older records)
+                        -- S/R levels
                         nearest_support,
                         nearest_resistance,
                         support_strength,
                         resistance_strength,
-                        
-                        -- Enhanced S/R (JSONB arrays with all levels)
                         support_levels,
                         resistance_levels,
                         
-                        -- SMC basic
+                        -- SMC
                         smc_bias,
                         price_zone,
                         equilibrium_price,
-                        
-                        -- SMC enhanced (JSONB)
                         smc_price_zone,
                         smc_equilibrium,
                         smc_order_blocks,
@@ -194,7 +168,7 @@ class Database:
                         smc_breaks,
                         smc_liquidity,
                         
-                        -- Pivots (traditional)
+                        -- Traditional pivots
                         daily_pivot,
                         pivot_daily,
                         price_vs_pivot,
@@ -205,7 +179,7 @@ class Database:
                         pivot_s2_traditional,
                         pivot_s3_traditional,
                         
-                        -- Pivots (Fibonacci)
+                        -- Fibonacci pivots
                         pivot_r1_fibonacci,
                         pivot_r2_fibonacci,
                         pivot_r3_fibonacci,
@@ -213,23 +187,40 @@ class Database:
                         pivot_s2_fibonacci,
                         pivot_s3_fibonacci,
                         
-                        -- Pivots (Camarilla)
+                        -- Camarilla pivots (complete)
+                        COALESCE(pivot_camarilla, 0) as pivot_camarilla,
+                        COALESCE(pivot_r1_camarilla, 0) as pivot_r1_camarilla,
+                        COALESCE(pivot_r2_camarilla, 0) as pivot_r2_camarilla,
                         pivot_r3_camarilla,
                         pivot_r4_camarilla,
+                        COALESCE(pivot_s1_camarilla, 0) as pivot_s1_camarilla,
+                        COALESCE(pivot_s2_camarilla, 0) as pivot_s2_camarilla,
                         pivot_s3_camarilla,
                         pivot_s4_camarilla,
+                        
+                        -- Woodie pivots
+                        COALESCE(pivot_woodie, 0) as pivot_woodie,
+                        COALESCE(pivot_r1_woodie, 0) as pivot_r1_woodie,
+                        COALESCE(pivot_r2_woodie, 0) as pivot_r2_woodie,
+                        COALESCE(pivot_r3_woodie, 0) as pivot_r3_woodie,
+                        COALESCE(pivot_s1_woodie, 0) as pivot_s1_woodie,
+                        COALESCE(pivot_s2_woodie, 0) as pivot_s2_woodie,
+                        COALESCE(pivot_s3_woodie, 0) as pivot_s3_woodie,
+                        
+                        -- DeMark pivots
+                        COALESCE(pivot_demark, 0) as pivot_demark,
+                        COALESCE(pivot_r1_demark, 0) as pivot_r1_demark,
+                        COALESCE(pivot_s1_demark, 0) as pivot_s1_demark,
                         
                         -- Pivot confluence
                         pivot_confluence_zones,
                         
-                        -- Momentum (old single timeframe)
+                        -- Momentum
                         rsi_1h,
                         volume_ratio_1h,
-                        
-                        -- Momentum (enhanced - all timeframes as JSONB)
                         momentum,
                         
-                        -- Signal factors (weighted reasons)
+                        -- Signal factors
                         signal_factors,
                         
                         -- Market structure
@@ -255,10 +246,9 @@ class Database:
                 if not row:
                     return None
                 
-                # Convert to dict and handle JSONB fields
                 result = dict(row)
                 
-                # Parse JSONB fields that might be returned as strings
+                # Parse JSONB fields
                 jsonb_fields = [
                     'trends', 'support_levels', 'resistance_levels',
                     'smc_order_blocks', 'smc_fvgs', 'smc_breaks', 'smc_liquidity',
@@ -297,7 +287,6 @@ class Database:
                         previous_signal_type,
                         summary,
                         key_reasons,
-                        -- Enhanced fields from migration 002
                         signal_factors,
                         smc_bias,
                         pivot_daily,
@@ -313,8 +302,6 @@ class Database:
                 signals = []
                 for row in rows:
                     signal = dict(row)
-                    
-                    # Parse JSONB fields
                     for field in ['key_reasons', 'signal_factors']:
                         if field in signal and signal[field]:
                             if isinstance(signal[field], str):
@@ -322,13 +309,12 @@ class Database:
                                     signal[field] = json.loads(signal[field])
                                 except (json.JSONDecodeError, TypeError):
                                     pass
-                    
                     signals.append(signal)
                 
                 return signals
                 
         except Exception as e:
-            logger.warning(f"Could not fetch signal history (table may not exist): {e}")
+            logger.warning(f"Could not fetch signal history: {e}")
             return []
     
     async def get_candle_count_since(self, since: datetime) -> int:
@@ -343,106 +329,43 @@ class Database:
             )
             return count or 0
     
-    async def save_llm_analysis(
-        self,
-        analysis_time: datetime,
-        price: float,
-        prediction_direction: str,
-        prediction_confidence: str,
-        predicted_price_1h: Optional[float],
-        predicted_price_4h: Optional[float],
-        key_levels: str,
-        reasoning: str,
-        full_response: str,
-        model_name: str,
-        response_time_seconds: float,
-        # New enhanced fields
-        invalidation_level: Optional[float] = None,
-        critical_support: Optional[float] = None,
-        critical_resistance: Optional[float] = None,
-        market_context: Optional[Dict[str, Any]] = None,
-        signal_factors_used: Optional[List[Dict[str, Any]]] = None,
-        smc_bias_at_analysis: Optional[str] = None,
-        trends_at_analysis: Optional[Dict[str, Any]] = None,
-        warnings_at_analysis: Optional[List[Dict[str, Any]]] = None,
-    ):
+    async def get_past_predictions_with_outcomes(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
-        Save LLM analysis to database with enhanced logging.
+        Get past LLM predictions that have actual outcomes recorded.
+        Used for self-assessment to improve prediction accuracy.
         
-        Stores not just the prediction, but also the market context that was
-        used to make the prediction (for later analysis of what inputs led to
-        good/bad predictions).
+        Returns predictions where we know what actually happened.
         """
         if not self.pool:
-            return
+            return []
         
         try:
             async with self.pool.acquire() as conn:
-                # Check if table exists
-                table_exists = await conn.fetchval(
-                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'llm_analysis')"
-                )
-                
-                if not table_exists:
-                    logger.debug("llm_analysis table doesn't exist yet - skipping save")
-                    return
-                
-                # Check if enhanced columns exist
-                has_enhanced = await conn.fetchval(
+                rows = await conn.fetch(
                     """
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.columns 
-                        WHERE table_name = 'llm_analysis' 
-                        AND column_name = 'market_context'
-                    )
-                    """
+                    SELECT 
+                        analysis_time,
+                        price,
+                        prediction_direction,
+                        prediction_confidence,
+                        predicted_price_1h,
+                        predicted_price_4h,
+                        actual_price_1h,
+                        actual_price_4h,
+                        direction_correct_1h,
+                        direction_correct_4h,
+                        reasoning
+                    FROM llm_analysis
+                    WHERE actual_price_1h IS NOT NULL
+                    ORDER BY analysis_time DESC
+                    LIMIT $1
+                    """,
+                    limit
                 )
-                
-                if has_enhanced:
-                    # Use enhanced insert with all new fields
-                    await conn.execute(
-                        """
-                        INSERT INTO llm_analysis (
-                            analysis_time, price, prediction_direction, prediction_confidence,
-                            predicted_price_1h, predicted_price_4h, key_levels, reasoning,
-                            full_response, model_name, response_time_seconds,
-                            invalidation_level, critical_support, critical_resistance,
-                            market_context, signal_factors_used, smc_bias_at_analysis,
-                            trends_at_analysis, warnings_at_analysis
-                        ) VALUES (
-                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-                            $12, $13, $14, $15, $16, $17, $18, $19
-                        )
-                        """,
-                        analysis_time, price, prediction_direction, prediction_confidence,
-                        predicted_price_1h, predicted_price_4h, key_levels, reasoning,
-                        full_response, model_name, response_time_seconds,
-                        invalidation_level, critical_support, critical_resistance,
-                        json.dumps(convert_decimals(market_context)) if market_context else None,
-                        json.dumps(convert_decimals(signal_factors_used)) if signal_factors_used else None,
-                        smc_bias_at_analysis,
-                        json.dumps(convert_decimals(trends_at_analysis)) if trends_at_analysis else None,
-                        json.dumps(convert_decimals(warnings_at_analysis)) if warnings_at_analysis else None
-                    )
-                else:
-                    # Fall back to original schema
-                    await conn.execute(
-                        """
-                        INSERT INTO llm_analysis (
-                            analysis_time, price, prediction_direction, prediction_confidence,
-                            predicted_price_1h, predicted_price_4h, key_levels, reasoning,
-                            full_response, model_name, response_time_seconds
-                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-                        """,
-                        analysis_time, price, prediction_direction, prediction_confidence,
-                        predicted_price_1h, predicted_price_4h, key_levels, reasoning,
-                        full_response, model_name, response_time_seconds
-                    )
-                
-                logger.debug("LLM analysis saved to database")
-                
+                return [dict(row) for row in rows]
         except Exception as e:
-            logger.warning(f"Could not save LLM analysis: {e}")
+            logger.warning(f"Could not fetch past predictions: {e}")
+            return []
     
     async def get_recent_llm_analyses(self, limit: int = 10) -> List[Dict[str, Any]]:
         """Get recent LLM analyses for context/comparison."""
@@ -473,3 +396,94 @@ class Database:
         except Exception as e:
             logger.warning(f"Could not fetch recent LLM analyses: {e}")
             return []
+    
+    async def save_llm_analysis(
+        self,
+        analysis_time: datetime,
+        price: float,
+        prediction_direction: str,
+        prediction_confidence: str,
+        predicted_price_1h: Optional[float],
+        predicted_price_4h: Optional[float],
+        key_levels: str,
+        reasoning: str,
+        full_response: str,
+        model_name: str,
+        response_time_seconds: float,
+        # New enhanced fields
+        invalidation_level: Optional[float] = None,
+        critical_support: Optional[float] = None,
+        critical_resistance: Optional[float] = None,
+        market_context: Optional[Dict[str, Any]] = None,
+        signal_factors_used: Optional[List[Dict[str, Any]]] = None,
+        smc_bias_at_analysis: Optional[str] = None,
+        trends_at_analysis: Optional[Dict[str, Any]] = None,
+        warnings_at_analysis: Optional[List[Dict[str, Any]]] = None,
+    ):
+        """Save LLM analysis to database with enhanced logging."""
+        if not self.pool:
+            return
+        
+        try:
+            async with self.pool.acquire() as conn:
+                table_exists = await conn.fetchval(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'llm_analysis')"
+                )
+                
+                if not table_exists:
+                    logger.debug("llm_analysis table doesn't exist yet - skipping save")
+                    return
+                
+                has_enhanced = await conn.fetchval(
+                    """
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns 
+                        WHERE table_name = 'llm_analysis' 
+                        AND column_name = 'market_context'
+                    )
+                    """
+                )
+                
+                if has_enhanced:
+                    await conn.execute(
+                        """
+                        INSERT INTO llm_analysis (
+                            analysis_time, price, prediction_direction, prediction_confidence,
+                            predicted_price_1h, predicted_price_4h, key_levels, reasoning,
+                            full_response, model_name, response_time_seconds,
+                            invalidation_level, critical_support, critical_resistance,
+                            market_context, signal_factors_used, smc_bias_at_analysis,
+                            trends_at_analysis, warnings_at_analysis
+                        ) VALUES (
+                            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                            $12, $13, $14, $15, $16, $17, $18, $19
+                        )
+                        """,
+                        analysis_time, price, prediction_direction, prediction_confidence,
+                        predicted_price_1h, predicted_price_4h, key_levels, reasoning,
+                        full_response, model_name, response_time_seconds,
+                        invalidation_level, critical_support, critical_resistance,
+                        json.dumps(convert_decimals(market_context)) if market_context else None,
+                        json.dumps(convert_decimals(signal_factors_used)) if signal_factors_used else None,
+                        smc_bias_at_analysis,
+                        json.dumps(convert_decimals(trends_at_analysis)) if trends_at_analysis else None,
+                        json.dumps(convert_decimals(warnings_at_analysis)) if warnings_at_analysis else None
+                    )
+                else:
+                    await conn.execute(
+                        """
+                        INSERT INTO llm_analysis (
+                            analysis_time, price, prediction_direction, prediction_confidence,
+                            predicted_price_1h, predicted_price_4h, key_levels, reasoning,
+                            full_response, model_name, response_time_seconds
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                        """,
+                        analysis_time, price, prediction_direction, prediction_confidence,
+                        predicted_price_1h, predicted_price_4h, key_levels, reasoning,
+                        full_response, model_name, response_time_seconds
+                    )
+                
+                logger.debug("LLM analysis saved to database")
+                
+        except Exception as e:
+            logger.warning(f"Could not save LLM analysis: {e}")

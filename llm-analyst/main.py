@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """
-LLM Market Analyst Service
+LLM Market Analyst Service v2.0
 
-Uses DeepSeek (or other Ollama models) to provide AI-powered market commentary
+Uses DeepSeek (or other Ollama models) to provide AI-powered market predictions
 based on candle data and enhanced market-analyzer output.
 
-Now includes:
-- Full utilization of enhanced market_analysis schema (pivots, SMC, signals, etc.)
-- Enhanced logging with all analysis details
-- Saving market context to database for analysis
+KEY FEATURES:
+- Configurable analysis interval (default: every 5 closed 1m candles)
+- Predictions for +1hr and +4hrs from prediction moment
+- Self-assessment from past predictions
+- All 5 pivot methods (Traditional, Fibonacci, Camarilla, Woodie, DeMark)
+- Strict output format enforcement
 
-Runs every 5 closed 1m candles (configurable).
+The LLM understands:
+- It runs after every X closed 1m candles (configurable)
+- It predicts price at +1hr and +4hrs from NOW
+- Short-term predictions where 0.2-2% moves are significant
+- Recent price action is critical for timing
 """
 
 import asyncio
@@ -26,7 +32,7 @@ from loguru import logger
 from config import Config
 from database import Database
 from ollama_client import OllamaClient, LLMResponse
-from prompt_builder import build_analysis_prompt, SYSTEM_PROMPT
+from prompt_builder import build_analysis_prompt, build_system_prompt
 from response_parser import parse_llm_response, ParsedAnalysis
 
 
@@ -56,12 +62,13 @@ class LLMAnalystService:
     async def start(self):
         """Initialize and start the service."""
         logger.info("=" * 70)
-        logger.info("🤖 LLM MARKET ANALYST SERVICE STARTING (Enhanced)")
+        logger.info("🤖 LLM MARKET ANALYST SERVICE v2.0 STARTING")
         logger.info("=" * 70)
         logger.info(f"Model: {self.config.ollama_model}")
         logger.info(f"Ollama URL: {self.config.ollama_base_url}")
-        logger.info(f"Analysis interval: Every {self.config.analysis_interval_candles} candles")
-        logger.info("Features: Enhanced market data, SMC, Pivots, Signal Factors")
+        logger.info(f"Analysis interval: Every {self.config.analysis_interval_candles} closed 1m candles")
+        logger.info(f"Predictions for: +1hr and +4hrs from prediction time")
+        logger.info("Features: All 5 pivot methods, SMC, Signal Factors, Self-Assessment")
         logger.info("")
         
         # Connect to database
@@ -135,7 +142,7 @@ class LLMAnalystService:
             await self.run_analysis()
     
     async def run_analysis(self):
-        """Run full LLM analysis with enhanced data and detailed logging."""
+        """Run full LLM analysis with enhanced data and self-assessment."""
         if not self.ollama or not self.db:
             return
         
@@ -143,20 +150,33 @@ class LLMAnalystService:
         
         try:
             # Gather data
-            logger.debug("Fetching market data (enhanced)...")
+            logger.debug("Fetching market data (enhanced with all pivots)...")
             
             candles_1h = await self.db.get_candles_1h(limit=self.config.candles_1h_lookback)
             candles_15m = await self.db.get_candles_15m(limit=self.config.candles_15m_lookback)
             market_analysis = await self.db.get_latest_market_analysis()
             signal_history = await self.db.get_signal_history(limit=self.config.signal_history_count)
             
-            logger.debug(f"Data: {len(candles_1h)} 1H candles, {len(candles_15m)} 15M candles, {len(signal_history)} signals")
+            # Get past predictions for self-assessment
+            past_predictions = await self.db.get_past_predictions_with_outcomes(limit=10)
+            
+            logger.debug(f"Data: {len(candles_1h)} 1H candles, {len(candles_15m)} 15M candles")
+            logger.debug(f"Signal history: {len(signal_history)} | Past predictions with outcomes: {len(past_predictions)}")
             
             if market_analysis:
-                # Log enhanced data availability
-                enhanced_fields = ['signal_factors', 'smc_order_blocks', 'pivot_confluence_zones', 'warnings']
-                available = [f for f in enhanced_fields if market_analysis.get(f)]
-                logger.debug(f"Enhanced fields available: {', '.join(available) if available else 'none'}")
+                # Log pivot methods availability
+                pivot_methods = []
+                if market_analysis.get('pivot_daily'):
+                    pivot_methods.append('Traditional')
+                if market_analysis.get('pivot_r1_fibonacci'):
+                    pivot_methods.append('Fibonacci')
+                if market_analysis.get('pivot_r3_camarilla'):
+                    pivot_methods.append('Camarilla')
+                if market_analysis.get('pivot_woodie'):
+                    pivot_methods.append('Woodie')
+                if market_analysis.get('pivot_demark'):
+                    pivot_methods.append('DeMark')
+                logger.debug(f"Pivot methods available: {', '.join(pivot_methods) if pivot_methods else 'none'}")
             
             # Get current price
             if candles_1h:
@@ -167,13 +187,18 @@ class LLMAnalystService:
                 logger.warning("No price data available")
                 return
             
-            # Build prompt with enhanced data
+            # Build system prompt with interval context
+            system_prompt = build_system_prompt(self.config.analysis_interval_candles)
+            
+            # Build prompt with enhanced data and past predictions
             prompt = build_analysis_prompt(
                 candles_1h=candles_1h,
                 candles_15m=candles_15m,
                 market_analysis=market_analysis,
                 signal_history=signal_history,
                 current_price=current_price,
+                past_predictions=past_predictions,
+                analysis_interval_candles=self.config.analysis_interval_candles,
             )
             
             logger.debug(f"Prompt built: {len(prompt)} chars")
@@ -183,7 +208,7 @@ class LLMAnalystService:
             
             response = await self.ollama.generate(
                 prompt=prompt,
-                system=SYSTEM_PROMPT,
+                system=system_prompt,
                 temperature=0.7,
                 max_tokens=1024,
             )
@@ -195,12 +220,15 @@ class LLMAnalystService:
             # Parse response
             parsed = parse_llm_response(response.content)
             
+            # Validate parsed response
+            parsed = self.validate_and_fix_response(parsed, current_price)
+            
             elapsed = time.time() - start_time
             
-            # Log the analysis (enhanced)
-            self.log_analysis(parsed, response, current_price, elapsed, market_analysis)
+            # Log the analysis
+            self.log_analysis(parsed, response, current_price, elapsed, market_analysis, past_predictions)
             
-            # Save to database with enhanced context
+            # Save to database
             await self.save_analysis_to_db(
                 parsed=parsed,
                 response=response,
@@ -214,73 +242,97 @@ class LLMAnalystService:
             import traceback
             traceback.print_exc()
     
+    def validate_and_fix_response(self, parsed: ParsedAnalysis, current_price: float) -> ParsedAnalysis:
+        """
+        Validate and fix common issues with LLM responses:
+        - Invalidation level direction (bullish should have lower invalidation)
+        - Missing required fields
+        - Contradictory outputs
+        """
+        # Fix invalidation level logic
+        if parsed.invalidation_level and parsed.direction != "NEUTRAL":
+            if parsed.direction == "BULLISH":
+                # Bullish prediction should have invalidation BELOW current price
+                if parsed.invalidation_level > current_price:
+                    logger.warning(f"⚠️ Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
+                    # Use critical support or calculate from price
+                    if parsed.critical_support and parsed.critical_support < current_price:
+                        parsed.invalidation_level = parsed.critical_support * 0.998
+                    else:
+                        parsed.invalidation_level = current_price * 0.99
+                    logger.info(f"   Fixed to ${parsed.invalidation_level:,.0f}")
+                    
+            elif parsed.direction == "BEARISH":
+                # Bearish prediction should have invalidation ABOVE current price
+                if parsed.invalidation_level < current_price:
+                    logger.warning(f"⚠️ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
+                    # Use critical resistance or calculate from price
+                    if parsed.critical_resistance and parsed.critical_resistance > current_price:
+                        parsed.invalidation_level = parsed.critical_resistance * 1.002
+                    else:
+                        parsed.invalidation_level = current_price * 1.01
+                    logger.info(f"   Fixed to ${parsed.invalidation_level:,.0f}")
+        
+        # Ensure price targets make sense
+        if parsed.price_1h:
+            if parsed.direction == "BULLISH" and parsed.price_1h < current_price:
+                logger.warning(f"⚠️ BULLISH but 1h target ${parsed.price_1h:,.0f} < current ${current_price:,.0f}")
+            elif parsed.direction == "BEARISH" and parsed.price_1h > current_price:
+                logger.warning(f"⚠️ BEARISH but 1h target ${parsed.price_1h:,.0f} > current ${current_price:,.0f}")
+        
+        # Fill in missing critical levels with defaults
+        if not parsed.critical_support:
+            parsed.critical_support = current_price * 0.99
+        if not parsed.critical_resistance:
+            parsed.critical_resistance = current_price * 1.01
+        
+        return parsed
+    
     def log_analysis(
         self,
         parsed: ParsedAnalysis,
         response: LLMResponse,
         current_price: float,
         elapsed: float,
-        market_analysis: Optional[Dict[str, Any]] = None
+        market_analysis: Optional[Dict[str, Any]],
+        past_predictions: Optional[List[Dict[str, Any]]] = None,
     ):
-        """Log LLM analysis with enhanced market context."""
+        """Log the analysis with rich formatting."""
         logger.info("")
         logger.info("=" * 80)
-        logger.info(f"🤖 LLM MARKET ANALYSIS - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        logger.info(f"🤖 LLM ANALYSIS COMPLETE - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
         logger.info("=" * 80)
-        logger.info(f"Model: {response.model} | Response time: {elapsed:.1f}s | Tokens: {response.eval_count}")
+        logger.info(f"Model: {response.model} | Time: {elapsed:.1f}s | Tokens: {response.total_tokens}")
+        logger.info(f"Analysis interval: Every {self.config.analysis_interval_candles} closed 1m candles")
         logger.info("")
         
-        # Market context from enhanced data
+        # Show past accuracy if available
+        if past_predictions:
+            correct_count = sum(1 for p in past_predictions if p.get('direction_correct_1h'))
+            total_count = len(past_predictions)
+            if total_count > 0:
+                accuracy = correct_count / total_count * 100
+                acc_emoji = "✅" if accuracy >= 60 else "⚠️" if accuracy >= 50 else "❌"
+                logger.info(f"📊 PAST ACCURACY (1H direction): {acc_emoji} {correct_count}/{total_count} ({accuracy:.0f}%)")
+                logger.info("")
+        
+        # Market context from analyzer
         if market_analysis:
-            logger.info("📈 MARKET CONTEXT (from market-analyzer):")
-            logger.info("-" * 60)
-            logger.info(f"  Signal: {market_analysis.get('signal_type', 'N/A')} ({market_analysis.get('signal_direction', 'N/A')})")
-            logger.info(f"  Confidence: {market_analysis.get('signal_confidence', 0):.0f}%")
+            signal_type = market_analysis.get('signal_type', 'N/A')
+            signal_dir = market_analysis.get('signal_direction', 'N/A')
+            smc_bias = market_analysis.get('smc_bias', 'N/A')
             
-            if market_analysis.get('smc_bias'):
-                logger.info(f"  SMC Bias: {market_analysis['smc_bias']}")
+            dir_emoji = "🟢" if signal_dir == "LONG" else "🔴" if signal_dir == "SHORT" else "🟡"
+            logger.info(f"📈 MARKET ANALYZER SIGNAL: {dir_emoji} {signal_type} ({signal_dir})")
+            logger.info(f"   SMC Bias: {smc_bias}")
             
-            if market_analysis.get('action_recommendation'):
-                logger.info(f"  Action: {market_analysis['action_recommendation']}")
-            
-            # Log top signal factors
-            signal_factors = market_analysis.get('signal_factors')
-            if signal_factors:
-                if isinstance(signal_factors, str):
-                    try:
-                        signal_factors = json.loads(signal_factors)
-                    except:
-                        signal_factors = None
-                
-                if signal_factors and isinstance(signal_factors, list):
-                    logger.info("")
-                    logger.info("  Top Signal Factors:")
-                    for factor in signal_factors[:5]:
-                        weight = factor.get('weight', 0)
-                        desc = factor.get('description', 'Unknown')
-                        symbol = "🟢" if weight > 0 else "🔴" if weight < 0 else "⚪"
-                        weight_pct = f"{weight*100:+.1f}%"
-                        logger.info(f"    {symbol} {weight_pct:>7s} | {desc}")
-            
-            # Log warnings (stored as list of strings)
             warnings = market_analysis.get('warnings')
             if warnings:
-                if isinstance(warnings, str):
-                    try:
-                        warnings = json.loads(warnings)
-                    except:
-                        warnings = None
-                
-                if warnings and isinstance(warnings, list):
-                    logger.info("")
-                    logger.info("  ⚠️ Active Warnings:")
-                    for warning in warnings:
-                        # Warnings are strings, not dicts
-                        if isinstance(warning, str):
-                            logger.info(f"    • {warning}")
-                        elif isinstance(warning, dict):
-                            msg = warning.get('message', warning.get('type', 'Unknown'))
-                            logger.info(f"    • {msg}")
+                if isinstance(warnings, list) and len(warnings) > 0:
+                    logger.info(f"   ⚠️ Warnings: {len(warnings)} active")
+                    for msg in warnings[:3]:
+                        if isinstance(msg, str):
+                            logger.info(f"      • {msg[:60]}")
             
             logger.info("")
         
@@ -311,19 +363,24 @@ class LLMAnalystService:
         if parsed.price_1h:
             diff_1h = parsed.price_1h - current_price
             diff_pct_1h = diff_1h / current_price * 100
-            logger.info(f"  Expected (1H):  ${parsed.price_1h:,.0f} ({diff_pct_1h:+.2f}%)")
+            dir_emoji = "📈" if diff_pct_1h > 0 else "📉"
+            logger.info(f"  Expected (1H):  ${parsed.price_1h:,.0f} ({diff_pct_1h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (1H):  Not specified")
+            logger.info(f"  Expected (1H):  Not specified ⚠️")
         
         if parsed.price_4h:
             diff_4h = parsed.price_4h - current_price
             diff_pct_4h = diff_4h / current_price * 100
-            logger.info(f"  Expected (4H):  ${parsed.price_4h:,.0f} ({diff_pct_4h:+.2f}%)")
+            dir_emoji = "📈" if diff_pct_4h > 0 else "📉"
+            logger.info(f"  Expected (4H):  ${parsed.price_4h:,.0f} ({diff_pct_4h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (4H):  Not specified")
+            logger.info(f"  Expected (4H):  Not specified ⚠️")
         
         if parsed.invalidation_level:
-            logger.info(f"  Invalidation:   ${parsed.invalidation_level:,.0f}")
+            inv_pct = (parsed.invalidation_level - current_price) / current_price * 100
+            logger.info(f"  Invalidation:   ${parsed.invalidation_level:,.0f} ({inv_pct:+.2f}%)")
+        else:
+            logger.info(f"  Invalidation:   Not specified ⚠️")
         
         logger.info("")
         
@@ -359,16 +416,7 @@ class LLMAnalystService:
             for line in lines:
                 logger.info(line)
         else:
-            logger.info("  No specific reasoning extracted")
-        
-        logger.info("")
-        
-        # Full response (collapsed)
-        logger.info("📝 FULL RESPONSE")
-        logger.info("-" * 60)
-        for line in response.content.split('\n'):
-            if line.strip():
-                logger.info(f"  {line[:100]}")
+            logger.info("  No specific reasoning extracted ⚠️")
         
         logger.info("")
         logger.info("=" * 80)
@@ -394,7 +442,6 @@ class LLMAnalystService:
         warnings_at_analysis = None
         
         if market_analysis:
-            # Build compact market context
             market_context = {
                 'signal_type': market_analysis.get('signal_type'),
                 'signal_direction': market_analysis.get('signal_direction'),
@@ -406,7 +453,6 @@ class LLMAnalystService:
                 'nearest_resistance': float(market_analysis['nearest_resistance']) if market_analysis.get('nearest_resistance') else None,
             }
             
-            # Signal factors
             sf = market_analysis.get('signal_factors')
             if sf:
                 if isinstance(sf, str):
@@ -416,10 +462,8 @@ class LLMAnalystService:
                         sf = None
                 signal_factors_used = sf
             
-            # SMC bias
             smc_bias_at_analysis = market_analysis.get('smc_bias')
             
-            # Trends
             trends = market_analysis.get('trends')
             if trends:
                 if isinstance(trends, str):
@@ -429,7 +473,6 @@ class LLMAnalystService:
                         trends = None
                 trends_at_analysis = trends
             
-            # Warnings
             warnings = market_analysis.get('warnings')
             if warnings:
                 if isinstance(warnings, str):
@@ -439,6 +482,11 @@ class LLMAnalystService:
                         warnings = None
                 warnings_at_analysis = warnings
         
+        # Build key levels string
+        key_levels = ""
+        if parsed.critical_support and parsed.critical_resistance:
+            key_levels = f"S: ${parsed.critical_support:,.0f} | R: ${parsed.critical_resistance:,.0f}"
+        
         # Save to database
         await self.db.save_llm_analysis(
             analysis_time=datetime.now(timezone.utc),
@@ -447,8 +495,8 @@ class LLMAnalystService:
             prediction_confidence=parsed.confidence,
             predicted_price_1h=parsed.price_1h,
             predicted_price_4h=parsed.price_4h,
-            key_levels=f"S: ${parsed.critical_support:,.0f} | R: ${parsed.critical_resistance:,.0f}" if parsed.critical_support and parsed.critical_resistance else "",
-            reasoning=parsed.reasoning,
+            key_levels=key_levels,
+            reasoning=parsed.reasoning or "",
             full_response=response.content,
             model_name=response.model,
             response_time_seconds=elapsed,
@@ -462,6 +510,8 @@ class LLMAnalystService:
             trends_at_analysis=trends_at_analysis,
             warnings_at_analysis=warnings_at_analysis,
         )
+        
+        logger.debug("✅ LLM analysis saved to database")
     
     async def stop(self):
         """Graceful shutdown."""

@@ -1,5 +1,5 @@
 """
-Signal Generator
+Signal Generator - v2.0 (Decisive Signals)
 
 Generates BUY/SELL signals based on multi-factor confluence:
 - Trend alignment across timeframes
@@ -8,6 +8,14 @@ Generates BUY/SELL signals based on multi-factor confluence:
 - Smart Money Concepts (OB, FVG, structure)
 - Pivot point confluence
 - Risk/Reward analysis
+- RECENT PRICE ACTION (critical for short-term predictions)
+
+IMPORTANT: This analyzer works on 1m candle closes but looks at the bigger picture
+to determine what the NEXT price movement will likely be. It must consider:
+- Recent candle patterns (last 5-15 candles)
+- Momentum shifts
+- Volume confirmation
+- Whether price is at key levels
 
 Each signal includes:
 - Direction (BUY/SELL)
@@ -79,6 +87,7 @@ class Signal:
     momentum_score: float = 0.0
     structure_score: float = 0.0
     level_score: float = 0.0
+    price_action_score: float = 0.0
     
     # Summary
     summary: str = ""
@@ -86,34 +95,32 @@ class Signal:
 
 class SignalGenerator:
     """
-    Multi-factor signal generator.
+    Multi-factor signal generator with DECISIVE bias.
+    
+    KEY PRINCIPLE: This runs after each 1m candle closes but looks at
+    the BIGGER PICTURE to predict the NEXT price movement. It needs to:
+    1. Identify the dominant direction based on higher timeframe trends
+    2. Confirm with momentum and volume
+    3. Use recent price action to time entries
+    4. Only go NEUTRAL when truly indecisive (rare!)
     
     Combines:
     - Multi-timeframe trend analysis
     - Support/Resistance levels
-    - Pivot points
+    - Pivot points (all methods)
     - Smart Money Concepts
     - Momentum indicators
     - Volume analysis
-    
-    To produce high-confidence signals only when multiple factors align.
+    - RECENT PRICE ACTION
     """
     
     # Minimum confidence to generate a signal
-    MIN_CONFIDENCE = 60
+    MIN_CONFIDENCE = 55  # Lowered to allow more signals
     
-    # Factor weights (sum should be ~1.0 for each direction)
-    WEIGHTS = {
-        "htf_trend": 0.20,      # Higher timeframe trend (4h, 1d)
-        "mtf_trend": 0.15,      # Medium timeframe trend (1h)
-        "ltf_trend": 0.10,      # Lower timeframe trend (15m)
-        "momentum": 0.15,       # RSI, divergence
-        "volume": 0.10,         # Volume confirmation
-        "sr_levels": 0.10,      # Support/Resistance
-        "pivot_confluence": 0.05,  # Pivot points
-        "smc_structure": 0.10,  # Market structure (BOS/CHoCH)
-        "smc_zones": 0.05,      # Order blocks, FVG
-    }
+    # Score thresholds - more aggressive to generate clearer signals
+    STRONG_THRESHOLD = 0.40  # Was 0.50 - Strong signals
+    MEDIUM_THRESHOLD = 0.25  # Was 0.30 - Regular signals  
+    WEAK_THRESHOLD = 0.12    # Was 0.20 - Weak signals
     
     def __init__(self):
         pass
@@ -127,33 +134,29 @@ class SignalGenerator:
         """
         Generate trading signal from market context.
         
-        Args:
-            context: MarketContext with trend/momentum analysis
-            pivots: Pivot point calculations
-            smc: Smart Money Concepts analysis
-            
-        Returns:
-            Signal with direction, confidence, and reasoning
+        This is the MAIN entry point. It analyzes all available data
+        and produces a DECISIVE signal with clear direction.
         """
         reasons: List[SignalReason] = []
         warnings: List[str] = []
         
         current_price = context.current_price
         
-        # ===== 1. TREND ANALYSIS =====
+        # ===== 1. TREND ANALYSIS (30% weight) =====
+        # Higher timeframes should dominate
         trend_score, trend_reasons = self._analyze_trends(context.trends)
         reasons.extend(trend_reasons)
         
-        # ===== 2. MOMENTUM ANALYSIS =====
+        # ===== 2. MOMENTUM ANALYSIS (20% weight) =====
         momentum_score, momentum_reasons = self._analyze_momentum(context.momentum)
         reasons.extend(momentum_reasons)
         
-        # ===== 3. PRICE ACTION CHECK =====
-        price_action_score, price_action_reason = self._analyze_price_action(context)
-        if price_action_reason:
-            reasons.append(price_action_reason)
+        # ===== 3. RECENT PRICE ACTION (20% weight) =====
+        # Critical for short-term predictions!
+        price_action_score, price_action_reasons = self._analyze_recent_price_action(context)
+        reasons.extend(price_action_reasons)
         
-        # ===== 4. SUPPORT/RESISTANCE =====
+        # ===== 4. SUPPORT/RESISTANCE (15% weight) =====
         level_score, level_reasons, level_warnings = self._analyze_levels(
             current_price,
             context.support_levels,
@@ -162,14 +165,14 @@ class SignalGenerator:
         reasons.extend(level_reasons)
         warnings.extend(level_warnings)
         
-        # ===== 5. PIVOT POINTS =====
+        # ===== 5. PIVOT POINTS (5% weight) =====
         if pivots:
             pivot_score, pivot_reasons = self._analyze_pivots(current_price, pivots)
             reasons.extend(pivot_reasons)
         else:
             pivot_score = 0
         
-        # ===== 6. SMART MONEY CONCEPTS =====
+        # ===== 6. SMART MONEY CONCEPTS (10% weight) =====
         if smc:
             smc_score, smc_reasons, smc_warnings = self._analyze_smc(current_price, smc)
             reasons.extend(smc_reasons)
@@ -179,18 +182,20 @@ class SignalGenerator:
             structure_score = 0
         
         # ===== CALCULATE FINAL SCORE =====
+        # Weighted combination - price action is critical for timing
         final_score = (
-            trend_score * 0.30 +        # Slightly reduced to make room for price action
-            momentum_score * 0.20 +     # Slightly reduced
-            price_action_score * 0.15 + # NEW: Price action weight
-            level_score * 0.15 +
-            pivot_score * 0.05 +
-            structure_score * 0.15
+            trend_score * 0.30 +        # Higher timeframe direction
+            momentum_score * 0.20 +     # Momentum confirmation
+            price_action_score * 0.20 + # Recent price action (CRITICAL)
+            level_score * 0.15 +        # S/R levels
+            pivot_score * 0.05 +        # Pivot confluence
+            structure_score * 0.10      # SMC structure
         )
         
         # ===== DETERMINE SIGNAL TYPE =====
         signal_type, direction, confidence = self._determine_signal(
-            final_score, trend_score, momentum_score, price_action_score, warnings
+            final_score, trend_score, momentum_score, price_action_score,
+            level_score, warnings
         )
         
         # ===== GENERATE TRADE SETUP =====
@@ -223,6 +228,7 @@ class SignalGenerator:
             momentum_score=momentum_score,
             structure_score=structure_score,
             level_score=level_score,
+            price_action_score=price_action_score,
             summary=summary,
         )
     
@@ -230,21 +236,26 @@ class SignalGenerator:
         self, 
         trends: Dict[str, TrendInfo]
     ) -> Tuple[float, List[SignalReason]]:
-        """Analyze multi-timeframe trends."""
+        """
+        Analyze multi-timeframe trends with HIGHER TIMEFRAME DOMINANCE.
+        
+        Key principle: Trade in the direction of the higher timeframe trend.
+        """
         reasons = []
         
-        # Timeframe weights (higher TF = more important)
+        # Weight by timeframe importance (higher = more important)
         tf_weights = {
-            "1d": 0.30,
-            "4h": 0.25,
-            "1h": 0.20,
-            "15m": 0.15,
-            "5m": 0.10,
+            "1d": 0.30,   # Daily trend is king
+            "4h": 0.25,   # 4H strong influence
+            "1h": 0.20,   # 1H good for entries
+            "15m": 0.15,  # 15m timing
+            "5m": 0.10,   # 5m noise but useful
         }
         
-        total_score = 0.0
+        weighted_score = 0.0
         total_weight = 0.0
         
+        # Analyze each timeframe
         for tf, weight in tf_weights.items():
             if tf not in trends:
                 continue
@@ -252,175 +263,239 @@ class SignalGenerator:
             trend = trends[tf]
             total_weight += weight
             
+            # Convert direction to score
             if trend.direction == "UPTREND":
-                score = trend.strength * weight
-                direction = "BULLISH"
+                tf_score = trend.strength
             elif trend.direction == "DOWNTREND":
-                score = -trend.strength * weight
-                direction = "BEARISH"
-            else:
-                score = 0
-                direction = "NEUTRAL"
+                tf_score = -trend.strength
+            else:  # SIDEWAYS
+                tf_score = 0
             
-            total_score += score
+            weighted_score += tf_score * weight
             
-            reasons.append(SignalReason(
-                factor=f"trend_{tf}",
-                direction=direction,
-                weight=score,
-                description=f"{tf} trend: {trend.direction} ({trend.strength:.0%} strength), EMA: {trend.ema_alignment}",
-            ))
+            # Add reason for significant trends
+            if abs(tf_score) > 0.3:
+                direction = "BULLISH" if tf_score > 0 else "BEARISH"
+                reasons.append(SignalReason(
+                    factor=f"trend_{tf}",
+                    direction=direction,
+                    weight=tf_score * weight,
+                    description=f"{tf} {trend.direction} ({trend.strength:.0%} strength)",
+                ))
         
-        # Normalize
+        # Normalize score
         if total_weight > 0:
-            total_score = total_score / total_weight
+            final_score = weighted_score / total_weight
+        else:
+            final_score = 0
         
-        # Check for trend alignment bonus
-        bullish_count = sum(1 for tf in ["1h", "4h", "1d"] if tf in trends and trends[tf].direction == "UPTREND")
-        bearish_count = sum(1 for tf in ["1h", "4h", "1d"] if tf in trends and trends[tf].direction == "DOWNTREND")
+        # Check for trend alignment (bonus for aligned trends)
+        if len(trends) >= 3:
+            bullish_count = sum(1 for t in trends.values() if t.direction == "UPTREND")
+            bearish_count = sum(1 for t in trends.values() if t.direction == "DOWNTREND")
+            
+            if bullish_count >= 3:
+                final_score += 0.15
+                reasons.append(SignalReason(
+                    factor="trend_alignment",
+                    direction="BULLISH",
+                    weight=0.15,
+                    description=f"Bullish alignment across {bullish_count} timeframes",
+                ))
+            elif bearish_count >= 3:
+                final_score -= 0.15
+                reasons.append(SignalReason(
+                    factor="trend_alignment",
+                    direction="BEARISH",
+                    weight=-0.15,
+                    description=f"Bearish alignment across {bearish_count} timeframes",
+                ))
         
-        if bullish_count >= 2:
-            reasons.append(SignalReason(
-                factor="trend_alignment",
-                direction="BULLISH",
-                weight=0.2,
-                description=f"HTF trend alignment: {bullish_count}/3 timeframes bullish",
-            ))
-            total_score = min(1.0, total_score + 0.15)
-        elif bearish_count >= 2:
-            reasons.append(SignalReason(
-                factor="trend_alignment",
-                direction="BEARISH",
-                weight=-0.2,
-                description=f"HTF trend alignment: {bearish_count}/3 timeframes bearish",
-            ))
-            total_score = max(-1.0, total_score - 0.15)
-        
-        return total_score, reasons
+        return np.clip(final_score, -1.0, 1.0), reasons
     
     def _analyze_momentum(
         self,
         momentum: Dict[str, MomentumInfo]
     ) -> Tuple[float, List[SignalReason]]:
-        """Analyze momentum indicators."""
+        """
+        Analyze momentum with RSI and volume.
+        
+        Key principle: Momentum should confirm the trend direction.
+        """
         reasons = []
         score = 0.0
+        count = 0
         
-        # RSI analysis (prefer 1h)
-        rsi_tf = "1h" if "1h" in momentum else ("4h" if "4h" in momentum else None)
+        # Priority timeframes for momentum
+        priority_tfs = ["1h", "15m", "5m"]
         
-        if rsi_tf and rsi_tf in momentum:
-            rsi = momentum[rsi_tf].rsi
+        for tf in priority_tfs:
+            if tf not in momentum:
+                continue
             
+            mom = momentum[tf]
+            count += 1
+            
+            # RSI analysis
+            rsi = mom.rsi
             if rsi < 30:
-                # Oversold - bullish
-                rsi_score = (30 - rsi) / 30 * 0.5  # Max 0.5
+                # Oversold - bullish signal
+                rsi_score = 0.3 + (30 - rsi) / 30 * 0.3  # 0.3 to 0.6
                 reasons.append(SignalReason(
-                    factor="rsi_oversold",
+                    factor=f"rsi_{tf}_oversold",
                     direction="BULLISH",
                     weight=rsi_score,
-                    description=f"RSI {rsi_tf} oversold at {rsi:.1f} - potential bounce",
+                    description=f"{tf} RSI oversold at {rsi:.1f} - bounce likely",
                 ))
                 score += rsi_score
             elif rsi > 70:
-                # Overbought - bearish
-                rsi_score = (rsi - 70) / 30 * 0.5
+                # Overbought - bearish signal
+                rsi_score = -(0.3 + (rsi - 70) / 30 * 0.3)
                 reasons.append(SignalReason(
-                    factor="rsi_overbought",
+                    factor=f"rsi_{tf}_overbought",
                     direction="BEARISH",
-                    weight=-rsi_score,
-                    description=f"RSI {rsi_tf} overbought at {rsi:.1f} - potential pullback",
+                    weight=rsi_score,
+                    description=f"{tf} RSI overbought at {rsi:.1f} - pullback likely",
                 ))
-                score -= rsi_score
-            else:
-                # Neutral zone - slight bias based on direction
-                if rsi > 50:
-                    reasons.append(SignalReason(
-                        factor="rsi_bullish_zone",
-                        direction="BULLISH",
-                        weight=0.1,
-                        description=f"RSI {rsi_tf} in bullish zone at {rsi:.1f}",
-                    ))
-                    score += 0.1
-                elif rsi < 50:
-                    reasons.append(SignalReason(
-                        factor="rsi_bearish_zone",
-                        direction="BEARISH",
-                        weight=-0.1,
-                        description=f"RSI {rsi_tf} in bearish zone at {rsi:.1f}",
-                    ))
-                    score -= 0.1
-        
-        # Volume analysis
-        if "1h" in momentum:
-            vol_ratio = momentum["1h"].volume_ratio
+                score += rsi_score
+            elif rsi > 55:
+                # Bullish momentum
+                score += 0.15
+            elif rsi < 45:
+                # Bearish momentum
+                score -= 0.15
             
+            # Volume analysis
+            vol_ratio = mom.volume_ratio
             if vol_ratio > 1.5:
+                # High volume - confirms move
                 reasons.append(SignalReason(
-                    factor="high_volume",
+                    factor=f"volume_{tf}_high",
                     direction="NEUTRAL",
-                    weight=0.15,
-                    description=f"High volume ({vol_ratio:.1f}x avg) - increased conviction",
+                    weight=0.1,
+                    description=f"{tf} high volume ({vol_ratio:.1f}x avg) - move confirmed",
                 ))
-                # Volume amplifies existing direction
-                score = score * 1.2
+                # Don't add to score directly - volume confirms direction
             elif vol_ratio < 0.5:
+                # Low volume - weak move
                 reasons.append(SignalReason(
-                    factor="low_volume",
+                    factor=f"volume_{tf}_low",
                     direction="NEUTRAL",
-                    weight=-0.1,
-                    description=f"Low volume ({vol_ratio:.1f}x avg) - weak conviction",
+                    weight=-0.05,
+                    description=f"{tf} low volume ({vol_ratio:.1f}x avg) - weak conviction",
                 ))
-                score = score * 0.8
+                score *= 0.8  # Reduce confidence
+            
+            # Taker buy ratio
+            tbr = mom.taker_buy_ratio
+            if tbr > 0.55:
+                score += 0.1
+                reasons.append(SignalReason(
+                    factor=f"taker_buy_{tf}",
+                    direction="BULLISH",
+                    weight=0.1,
+                    description=f"{tf} buyers dominant ({tbr:.1%} taker buys)",
+                ))
+            elif tbr < 0.45:
+                score -= 0.1
+                reasons.append(SignalReason(
+                    factor=f"taker_sell_{tf}",
+                    direction="BEARISH",
+                    weight=-0.1,
+                    description=f"{tf} sellers dominant ({tbr:.1%} taker buys)",
+                ))
+        
+        if count > 0:
+            score /= count
         
         return np.clip(score, -1.0, 1.0), reasons
     
-    def _analyze_price_action(self, context: MarketContext) -> Tuple[float, Optional[SignalReason]]:
+    def _analyze_recent_price_action(
+        self,
+        context: MarketContext
+    ) -> Tuple[float, List[SignalReason]]:
         """
-        Check if price is actually moving in the expected direction.
-        This prevents giving bullish signals when price is clearly falling.
+        Analyze RECENT price action to determine immediate direction.
+        
+        This is CRITICAL for short-term predictions (1h, 4h).
+        Looks at:
+        - Recent candle patterns
+        - Price momentum
+        - Direction of recent moves
         """
+        reasons = []
         score = 0.0
-        reason = None
         
-        # Get 5m candles to check recent price action
-        if "5m" not in context.candle_data:
-            return 0.0, None
+        # Get recent price data from context
+        # We need to look at recent high/low/close movements
         
-        candles_5m = context.candle_data["5m"]
-        
-        if len(candles_5m) < 12:
-            return 0.0, None
-        
-        # Check last hour of 5m candles (12 candles)
-        last_hour_5m = candles_5m[-12:]
-        price_change_1h = (last_hour_5m.close[-1] - last_hour_5m.close[0]) / last_hour_5m.close[0]
-        
-        # Count green vs red candles in last hour
-        green_candles_5m = sum(1 for i in range(len(last_hour_5m)) if last_hour_5m.close[i] > last_hour_5m.open[i])
-        red_candles_5m = sum(1 for i in range(len(last_hour_5m)) if last_hour_5m.close[i] < last_hour_5m.open[i])
-        
-        # Determine price action bias
-        if price_change_1h > 0.002:  # More than 0.2% up in last hour
-            if green_candles_5m > red_candles_5m + 2:  # Clear bullish candles
-                score = 0.5
-                reason = SignalReason(
-                    factor="price_action",
+        # Check 5m trend for immediate direction
+        if "5m" in context.trends:
+            trend_5m = context.trends["5m"]
+            if trend_5m.direction == "UPTREND":
+                score += 0.25 * trend_5m.strength
+                reasons.append(SignalReason(
+                    factor="price_action_5m",
                     direction="BULLISH",
-                    weight=0.5,
-                    description=f"Price rising (+{price_change_1h*100:.2f}% last hour, {green_candles_5m}/12 green candles)"
-                )
-        elif price_change_1h < -0.002:  # More than 0.2% down in last hour
-            if red_candles_5m > green_candles_5m + 2:  # Clear bearish candles
-                score = -0.5
-                reason = SignalReason(
-                    factor="price_action",
+                    weight=0.25 * trend_5m.strength,
+                    description=f"5m price action bullish ({trend_5m.strength:.0%})",
+                ))
+            elif trend_5m.direction == "DOWNTREND":
+                score -= 0.25 * trend_5m.strength
+                reasons.append(SignalReason(
+                    factor="price_action_5m",
                     direction="BEARISH",
-                    weight=-0.5,
-                    description=f"Price falling ({price_change_1h*100:.2f}% last hour, {red_candles_5m}/12 red candles)"
-                )
+                    weight=-0.25 * trend_5m.strength,
+                    description=f"5m price action bearish ({trend_5m.strength:.0%})",
+                ))
         
-        return score, reason
+        # Check 15m for confirmation
+        if "15m" in context.trends:
+            trend_15m = context.trends["15m"]
+            if trend_15m.direction == "UPTREND":
+                score += 0.20 * trend_15m.strength
+                reasons.append(SignalReason(
+                    factor="price_action_15m",
+                    direction="BULLISH",
+                    weight=0.20 * trend_15m.strength,
+                    description=f"15m price action bullish ({trend_15m.strength:.0%})",
+                ))
+            elif trend_15m.direction == "DOWNTREND":
+                score -= 0.20 * trend_15m.strength
+                reasons.append(SignalReason(
+                    factor="price_action_15m",
+                    direction="BEARISH",
+                    weight=-0.20 * trend_15m.strength,
+                    description=f"15m price action bearish ({trend_15m.strength:.0%})",
+                ))
+        
+        # Check momentum alignment with trend
+        if "5m" in context.momentum:
+            mom_5m = context.momentum["5m"]
+            rsi = mom_5m.rsi
+            
+            # RSI momentum
+            if 40 <= rsi <= 60:
+                # Neutral RSI - look at direction
+                pass
+            elif rsi > 60:
+                score += 0.15
+                reasons.append(SignalReason(
+                    factor="momentum_5m_bullish",
+                    direction="BULLISH",
+                    weight=0.15,
+                    description=f"5m momentum bullish (RSI {rsi:.1f})",
+                ))
+            elif rsi < 40:
+                score -= 0.15
+                reasons.append(SignalReason(
+                    factor="momentum_5m_bearish",
+                    direction="BEARISH",
+                    weight=-0.15,
+                    description=f"5m momentum bearish (RSI {rsi:.1f})",
+                ))
+        
+        return np.clip(score, -1.0, 1.0), reasons
     
     def _analyze_levels(
         self,
@@ -428,7 +503,7 @@ class SignalGenerator:
         supports: List[PriceLevel],
         resistances: List[PriceLevel],
     ) -> Tuple[float, List[SignalReason], List[str]]:
-        """Analyze proximity to support/resistance."""
+        """Analyze support/resistance levels."""
         reasons = []
         warnings = []
         score = 0.0
@@ -436,50 +511,52 @@ class SignalGenerator:
         # Check nearest support
         if supports:
             nearest_support = supports[0]
-            distance_pct = (price - nearest_support.price) / price * 100
+            dist_pct = (price - nearest_support.price) / price * 100
             
-            if distance_pct < 0.3:
-                # Very close to support
-                reasons.append(SignalReason(
-                    factor="at_support",
-                    direction="BULLISH",
-                    weight=0.3 * nearest_support.strength,
-                    description=f"At strong support ${nearest_support.price:,.0f} ({distance_pct:.2f}% away)",
-                ))
-                score += 0.3 * nearest_support.strength
-                warnings.append(f"🚫 At support - avoid SHORT until break below ${nearest_support.price:,.0f}")
-            elif distance_pct < 1.0:
+            if dist_pct < 0.3 and nearest_support.strength > 0.5:
+                # Very close to strong support - bullish
+                score += 0.25
                 reasons.append(SignalReason(
                     factor="near_support",
                     direction="BULLISH",
-                    weight=0.15 * nearest_support.strength,
-                    description=f"Near support ${nearest_support.price:,.0f} ({distance_pct:.2f}% away)",
+                    weight=0.25,
+                    description=f"Near strong support ${nearest_support.price:,.0f} ({dist_pct:.2f}% away)",
                 ))
-                score += 0.15 * nearest_support.strength
+                warnings.append(f"Close to support ${nearest_support.price:,.0f} - short risky")
+            elif dist_pct < 1.0:
+                # Close to support
+                score += 0.10
+                reasons.append(SignalReason(
+                    factor="support_nearby",
+                    direction="BULLISH",
+                    weight=0.10,
+                    description=f"Support nearby at ${nearest_support.price:,.0f}",
+                ))
         
         # Check nearest resistance
         if resistances:
             nearest_resistance = resistances[0]
-            distance_pct = (nearest_resistance.price - price) / price * 100
+            dist_pct = (nearest_resistance.price - price) / price * 100
             
-            if distance_pct < 0.3:
-                # Very close to resistance
-                reasons.append(SignalReason(
-                    factor="at_resistance",
-                    direction="BEARISH",
-                    weight=-0.3 * nearest_resistance.strength,
-                    description=f"At strong resistance ${nearest_resistance.price:,.0f} ({distance_pct:.2f}% away)",
-                ))
-                score -= 0.3 * nearest_resistance.strength
-                warnings.append(f"🚫 At resistance - avoid LONG until break above ${nearest_resistance.price:,.0f}")
-            elif distance_pct < 1.0:
+            if dist_pct < 0.3 and nearest_resistance.strength > 0.5:
+                # Very close to strong resistance - bearish
+                score -= 0.25
                 reasons.append(SignalReason(
                     factor="near_resistance",
                     direction="BEARISH",
-                    weight=-0.15 * nearest_resistance.strength,
-                    description=f"Near resistance ${nearest_resistance.price:,.0f} ({distance_pct:.2f}% away)",
+                    weight=-0.25,
+                    description=f"Near strong resistance ${nearest_resistance.price:,.0f} ({dist_pct:.2f}% away)",
                 ))
-                score -= 0.15 * nearest_resistance.strength
+                warnings.append(f"Close to resistance ${nearest_resistance.price:,.0f} - long risky")
+            elif dist_pct < 1.0:
+                # Close to resistance
+                score -= 0.10
+                reasons.append(SignalReason(
+                    factor="resistance_nearby",
+                    direction="BEARISH",
+                    weight=-0.10,
+                    description=f"Resistance nearby at ${nearest_resistance.price:,.0f}",
+                ))
         
         return np.clip(score, -1.0, 1.0), reasons, warnings
     
@@ -488,58 +565,56 @@ class SignalGenerator:
         price: float,
         pivots: AllPivotPoints
     ) -> Tuple[float, List[SignalReason]]:
-        """Analyze pivot point positions and confluence."""
+        """Analyze pivot points with confluence from all methods."""
         reasons = []
         score = 0.0
         
-        # Check confluence zones
-        nearest_resistance = pivots.get_nearest_resistance(price)
-        nearest_support = pivots.get_nearest_support(price)
-        
-        if nearest_support:
-            support_price, strength, methods = nearest_support
-            distance_pct = (price - support_price) / price * 100
-            
-            if distance_pct < 0.5 and strength >= 0.4:
-                reasons.append(SignalReason(
-                    factor="pivot_support_confluence",
-                    direction="BULLISH",
-                    weight=0.2 * strength,
-                    description=f"Pivot confluence support at ${support_price:,.0f} ({len(methods)} methods: {', '.join(methods)})",
-                ))
-                score += 0.2 * strength
-        
-        if nearest_resistance:
-            resist_price, strength, methods = nearest_resistance
-            distance_pct = (resist_price - price) / price * 100
-            
-            if distance_pct < 0.5 and strength >= 0.4:
-                reasons.append(SignalReason(
-                    factor="pivot_resistance_confluence",
-                    direction="BEARISH",
-                    weight=-0.2 * strength,
-                    description=f"Pivot confluence resistance at ${resist_price:,.0f} ({len(methods)} methods: {', '.join(methods)})",
-                ))
-                score -= 0.2 * strength
-        
-        # Position relative to daily pivot
+        # Check position vs daily pivot
         daily_pivot = pivots.traditional.pivot
         if price > daily_pivot:
+            score += 0.10
             reasons.append(SignalReason(
-                factor="above_daily_pivot",
+                factor="above_pivot",
                 direction="BULLISH",
-                weight=0.1,
-                description=f"Price above daily pivot (${daily_pivot:,.0f})",
+                weight=0.10,
+                description=f"Price above daily pivot ${daily_pivot:,.0f}",
             ))
-            score += 0.1
         else:
+            score -= 0.10
             reasons.append(SignalReason(
-                factor="below_daily_pivot",
+                factor="below_pivot",
                 direction="BEARISH",
-                weight=-0.1,
-                description=f"Price below daily pivot (${daily_pivot:,.0f})",
+                weight=-0.10,
+                description=f"Price below daily pivot ${daily_pivot:,.0f}",
             ))
-            score -= 0.1
+        
+        # Check confluence zones
+        nearest_r = pivots.get_nearest_resistance(price)
+        nearest_s = pivots.get_nearest_support(price)
+        
+        if nearest_s:
+            conf_price, conf_strength, methods = nearest_s
+            dist_pct = (price - conf_price) / price * 100
+            if dist_pct < 0.5 and conf_strength >= 0.4:
+                score += 0.15 * conf_strength
+                reasons.append(SignalReason(
+                    factor="pivot_confluence_support",
+                    direction="BULLISH",
+                    weight=0.15 * conf_strength,
+                    description=f"Pivot confluence support ${conf_price:,.0f} ({conf_strength:.0%} strength, {', '.join(methods)})",
+                ))
+        
+        if nearest_r:
+            conf_price, conf_strength, methods = nearest_r
+            dist_pct = (conf_price - price) / price * 100
+            if dist_pct < 0.5 and conf_strength >= 0.4:
+                score -= 0.15 * conf_strength
+                reasons.append(SignalReason(
+                    factor="pivot_confluence_resistance",
+                    direction="BEARISH",
+                    weight=-0.15 * conf_strength,
+                    description=f"Pivot confluence resistance ${conf_price:,.0f} ({conf_strength:.0%} strength, {', '.join(methods)})",
+                ))
         
         return np.clip(score, -1.0, 1.0), reasons
     
@@ -555,109 +630,106 @@ class SignalGenerator:
         
         # Market structure bias
         if smc.current_bias == "BULLISH":
+            score += 0.20
             reasons.append(SignalReason(
-                factor="smc_bullish_structure",
+                factor="smc_bias",
                 direction="BULLISH",
-                weight=0.25,
-                description="Market structure bullish (HH/HL pattern)",
+                weight=0.20,
+                description="SMC structure bias: BULLISH",
             ))
-            score += 0.25
         elif smc.current_bias == "BEARISH":
+            score -= 0.20
             reasons.append(SignalReason(
-                factor="smc_bearish_structure",
+                factor="smc_bias",
                 direction="BEARISH",
-                weight=-0.25,
-                description="Market structure bearish (LH/LL pattern)",
+                weight=-0.20,
+                description="SMC structure bias: BEARISH",
             ))
-            score -= 0.25
         
-        # Check for CHoCH (stronger signal)
-        recent_choch = [b for b in smc.structure_breaks if b.type == "CHOCH"]
-        if recent_choch:
-            latest = recent_choch[-1]
-            if latest.direction == "BULLISH":
+        # Structure breaks (CHoCH, BOS)
+        recent_breaks = [b for b in smc.structure_breaks if b.type == "CHOCH"]
+        if recent_breaks:
+            latest_break = recent_breaks[-1]
+            if latest_break.direction == "BULLISH":
+                score += 0.25
                 reasons.append(SignalReason(
                     factor="bullish_choch",
                     direction="BULLISH",
-                    weight=0.3,
-                    description=f"Bullish CHoCH - potential trend reversal up",
+                    weight=0.25,
+                    description=f"Bullish CHoCH at ${latest_break.break_level:,.0f}",
                 ))
-                score += 0.3
             else:
+                score -= 0.25
                 reasons.append(SignalReason(
                     factor="bearish_choch",
                     direction="BEARISH",
-                    weight=-0.3,
-                    description=f"Bearish CHoCH - potential trend reversal down",
+                    weight=-0.25,
+                    description=f"Bearish CHoCH at ${latest_break.break_level:,.0f}",
                 ))
-                score -= 0.3
         
-        # Order block proximity
+        # Order blocks
         for ob in smc.bullish_obs[:2]:
-            if ob.bottom <= price <= ob.top and not ob.mitigated:
+            if ob.bottom <= price <= ob.top:
+                score += 0.15 * ob.strength
                 reasons.append(SignalReason(
                     factor="in_bullish_ob",
                     direction="BULLISH",
-                    weight=0.2 * ob.strength,
-                    description=f"Price in bullish order block (${ob.bottom:,.0f}-${ob.top:,.0f})",
+                    weight=0.15 * ob.strength,
+                    description=f"Price in bullish OB (${ob.bottom:,.0f}-${ob.top:,.0f})",
                 ))
-                score += 0.2 * ob.strength
                 break
         
         for ob in smc.bearish_obs[:2]:
-            if ob.bottom <= price <= ob.top and not ob.mitigated:
+            if ob.bottom <= price <= ob.top:
+                score -= 0.15 * ob.strength
                 reasons.append(SignalReason(
                     factor="in_bearish_ob",
                     direction="BEARISH",
-                    weight=-0.2 * ob.strength,
-                    description=f"Price in bearish order block (${ob.bottom:,.0f}-${ob.top:,.0f})",
+                    weight=-0.15 * ob.strength,
+                    description=f"Price in bearish OB (${ob.bottom:,.0f}-${ob.top:,.0f})",
                 ))
-                score -= 0.2 * ob.strength
                 break
         
-        # FVG proximity
+        # FVGs
         for fvg in smc.bullish_fvgs[:2]:
             if fvg.bottom <= price <= fvg.top:
+                score += 0.10
                 reasons.append(SignalReason(
                     factor="in_bullish_fvg",
                     direction="BULLISH",
-                    weight=0.15,
+                    weight=0.10,
                     description=f"Price in bullish FVG (${fvg.bottom:,.0f}-${fvg.top:,.0f})",
                 ))
-                score += 0.15
                 break
         
         for fvg in smc.bearish_fvgs[:2]:
             if fvg.bottom <= price <= fvg.top:
+                score -= 0.10
                 reasons.append(SignalReason(
                     factor="in_bearish_fvg",
                     direction="BEARISH",
-                    weight=-0.15,
+                    weight=-0.10,
                     description=f"Price in bearish FVG (${fvg.bottom:,.0f}-${fvg.top:,.0f})",
                 ))
-                score -= 0.15
                 break
         
         # Premium/Discount zone
         if price < smc.discount_zone[1]:
+            score += 0.15
             reasons.append(SignalReason(
                 factor="discount_zone",
                 direction="BULLISH",
                 weight=0.15,
-                description=f"Price in discount zone (below ${smc.equilibrium:,.0f} EQ)",
+                description=f"Price in DISCOUNT zone (below ${smc.equilibrium:,.0f})",
             ))
-            score += 0.15
         elif price > smc.premium_zone[0]:
+            score -= 0.15
             reasons.append(SignalReason(
                 factor="premium_zone",
                 direction="BEARISH",
                 weight=-0.15,
-                description=f"Price in premium zone (above ${smc.equilibrium:,.0f} EQ)",
+                description=f"Price in PREMIUM zone (above ${smc.equilibrium:,.0f})",
             ))
-            score -= 0.15
-        
-        # Liquidity pools - show in log but don't spam warnings
-        # (warnings are handled separately in main.py)
         
         return np.clip(score, -1.0, 1.0), reasons, warnings
     
@@ -667,64 +739,67 @@ class SignalGenerator:
         trend_score: float,
         momentum_score: float,
         price_action_score: float,
+        level_score: float,
         warnings: List[str],
     ) -> Tuple[SignalType, str, float]:
-        """Determine signal type, direction, and confidence with STRICTER thresholds."""
+        """
+        Determine signal type with MORE DECISIVE thresholds.
         
-        # FIXED: Stricter score thresholds to reduce false signals
-        if final_score >= 0.5:  # Was 0.6 - Strong buy needs 0.5+
+        Key changes:
+        - Lower thresholds to generate more signals
+        - Narrower neutral zone
+        - Consider alignment between factors
+        """
+        
+        # Check for factor alignment (bonus confidence)
+        alignment_bonus = 0
+        if trend_score > 0 and momentum_score > 0 and price_action_score > 0:
+            alignment_bonus = 10  # All bullish
+        elif trend_score < 0 and momentum_score < 0 and price_action_score < 0:
+            alignment_bonus = 10  # All bearish
+        
+        # Determine signal based on final score
+        if final_score >= self.STRONG_THRESHOLD:
             signal_type = SignalType.STRONG_BUY
             direction = "LONG"
-            base_confidence = 75 + (final_score - 0.5) * 50
-        elif final_score >= 0.3:  # Was 0.35 - Buy needs 0.3+
+            base_confidence = 75 + (final_score - self.STRONG_THRESHOLD) * 50
+        elif final_score >= self.MEDIUM_THRESHOLD:
             signal_type = SignalType.BUY
             direction = "LONG"
-            base_confidence = 65 + (final_score - 0.3) * 50
-        elif final_score >= 0.2:  # CRITICAL FIX: Was 0.15 - Weak buy needs 0.2+
+            base_confidence = 65 + (final_score - self.MEDIUM_THRESHOLD) * 50
+        elif final_score >= self.WEAK_THRESHOLD:
             signal_type = SignalType.WEAK_BUY
             direction = "LONG"
-            base_confidence = 50 + (final_score - 0.2) * 75
-        elif final_score <= -0.5:  # Was -0.6
+            base_confidence = 55 + (final_score - self.WEAK_THRESHOLD) * 75
+        elif final_score <= -self.STRONG_THRESHOLD:
             signal_type = SignalType.STRONG_SELL
             direction = "SHORT"
-            base_confidence = 75 + (abs(final_score) - 0.5) * 50
-        elif final_score <= -0.3:  # Was -0.35
+            base_confidence = 75 + (abs(final_score) - self.STRONG_THRESHOLD) * 50
+        elif final_score <= -self.MEDIUM_THRESHOLD:
             signal_type = SignalType.SELL
             direction = "SHORT"
-            base_confidence = 65 + (abs(final_score) - 0.3) * 50
-        elif final_score <= -0.2:  # CRITICAL FIX: Was -0.15 - Weak sell needs -0.2 or lower
+            base_confidence = 65 + (abs(final_score) - self.MEDIUM_THRESHOLD) * 50
+        elif final_score <= -self.WEAK_THRESHOLD:
             signal_type = SignalType.WEAK_SELL
             direction = "SHORT"
-            base_confidence = 50 + (abs(final_score) - 0.2) * 75
+            base_confidence = 55 + (abs(final_score) - self.WEAK_THRESHOLD) * 75
         else:
-            # NEUTRAL zone is now -0.2 to 0.2 (was -0.15 to 0.15) - 33% wider
+            # Neutral zone is now very narrow: -0.12 to 0.12
             signal_type = SignalType.NEUTRAL
             direction = "NONE"
             base_confidence = 0
         
-        # NEW: Verify price action matches signal direction
-        if direction == "LONG" and price_action_score < -0.2:
-            # Trying to go long but price is falling - reduce confidence significantly
-            base_confidence -= 20
-            if base_confidence < 40:
-                # Cancel the signal if confidence too low
-                signal_type = SignalType.NEUTRAL
-                direction = "NONE"
-        elif direction == "SHORT" and price_action_score > 0.2:
-            # Trying to go short but price is rising - reduce confidence
-            base_confidence -= 20
-            if base_confidence < 40:
-                signal_type = SignalType.NEUTRAL
-                direction = "NONE"
+        # Apply alignment bonus
+        base_confidence += alignment_bonus
         
-        # Adjust confidence based on trend alignment
-        if direction == "LONG" and trend_score > 0.3:
-            base_confidence += 5
-        elif direction == "SHORT" and trend_score < -0.3:
-            base_confidence += 5
+        # Verify price action matches signal direction
+        if direction == "LONG" and price_action_score < -0.3:
+            base_confidence -= 15  # Price action contradicts
+        elif direction == "SHORT" and price_action_score > 0.3:
+            base_confidence -= 15  # Price action contradicts
         
-        # Reduce confidence if there are warnings
-        warning_penalty = min(15, len(warnings) * 5)
+        # Reduce confidence for warnings
+        warning_penalty = min(10, len(warnings) * 3)
         base_confidence -= warning_penalty
         
         confidence = np.clip(base_confidence, 0, 100)
@@ -743,14 +818,13 @@ class SignalGenerator:
         """Generate entry, stop loss, and take profit levels."""
         
         if direction == "LONG":
-            # Entry at current price
             entry = price
             
-            # Stop loss below nearest support or 1.5% below entry
+            # Stop loss below nearest support or 1% below entry
             if supports:
-                sl_level = supports[0].price * 0.998  # Just below support
+                sl_level = supports[0].price * 0.998
             else:
-                sl_level = price * 0.985
+                sl_level = price * 0.99
             
             # Take profits at resistances or pivot levels
             tp_levels = []
@@ -765,15 +839,14 @@ class SignalGenerator:
             
             tp_levels = sorted(set(tp_levels))[:3]
             
-            # Default TPs if none found
             if len(tp_levels) < 3:
                 tp_levels = [
-                    price * 1.01,
-                    price * 1.02,
-                    price * 1.035,
+                    price * 1.008,
+                    price * 1.015,
+                    price * 1.025,
                 ]
             
-            invalidation = f"Break below ${sl_level:,.0f} support"
+            invalidation = f"Break below ${sl_level:,.0f}"
             
         else:  # SHORT
             entry = price
@@ -781,7 +854,7 @@ class SignalGenerator:
             if resistances:
                 sl_level = resistances[0].price * 1.002
             else:
-                sl_level = price * 1.015
+                sl_level = price * 1.01
             
             tp_levels = []
             
@@ -797,12 +870,12 @@ class SignalGenerator:
             
             if len(tp_levels) < 3:
                 tp_levels = [
-                    price * 0.99,
-                    price * 0.98,
-                    price * 0.965,
+                    price * 0.992,
+                    price * 0.985,
+                    price * 0.975,
                 ]
             
-            invalidation = f"Break above ${sl_level:,.0f} resistance"
+            invalidation = f"Break above ${sl_level:,.0f}"
         
         # Calculate risk/reward
         risk = abs(entry - sl_level)
@@ -830,7 +903,7 @@ class SignalGenerator:
         """Generate human-readable summary."""
         
         if direction == "NONE":
-            return "No clear signal - market conditions mixed. Wait for better setup."
+            return "NEUTRAL - Market conditions indecisive. Score too close to zero for directional bias. Wait for clearer setup."
         
         # Count bullish vs bearish reasons
         bullish = [r for r in reasons if r.direction == "BULLISH"]
@@ -838,8 +911,7 @@ class SignalGenerator:
         
         direction_word = "LONG" if direction == "LONG" else "SHORT"
         
-        summary = f"{signal_type.value} signal ({confidence:.0f}% confidence). "
-        summary += f"Suggesting {direction_word} position. "
+        summary = f"{signal_type.value} ({confidence:.0f}% confidence) - {direction_word}. "
         
         # Top reasons
         if direction == "LONG":
@@ -848,10 +920,10 @@ class SignalGenerator:
             top_reasons = sorted(bearish, key=lambda x: abs(x.weight), reverse=True)[:3]
         
         if top_reasons:
-            summary += "Key factors: "
-            summary += "; ".join([r.description for r in top_reasons])
+            summary += "Key: "
+            summary += " | ".join([r.description for r in top_reasons])
         
         if warnings:
-            summary += f" WARNINGS: {len(warnings)} concerns noted."
+            summary += f" ⚠ {len(warnings)} warnings"
         
         return summary
