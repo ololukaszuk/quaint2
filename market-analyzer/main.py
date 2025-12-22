@@ -318,6 +318,8 @@ class MarketAnalyzerService:
                     )
                     """
                 )
+                logger.info(f"SCHEMA CHECK: pivot_woodie exists? {has_woodie}")
+                logger.info(f"BRANCH: {'FULL INSERT' if has_woodie else 'FALLBACK'}")
                 
                 if has_woodie:
                     # Full insert with all 5 pivot methods
