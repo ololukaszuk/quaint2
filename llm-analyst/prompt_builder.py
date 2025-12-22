@@ -39,7 +39,7 @@ You receive comprehensive market data including:
 - Recent price action (last 15-30 candles)
 
 RESPONSE RULES:
-- Be concise (max 300 words)
+- Provide comprehensive reasoning (max 1500 words)
 - ALWAYS state direction: BULLISH / BEARISH / NEUTRAL
 - ALWAYS give confidence: HIGH / MEDIUM / LOW
 - ALWAYS give specific price targets for 1h and 4h

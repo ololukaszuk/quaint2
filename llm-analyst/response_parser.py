@@ -192,7 +192,7 @@ def extract_reasoning(text: str) -> str:
             # Clean up
             reasoning = re.sub(r'\s+', ' ', reasoning)
             if len(reasoning) > 20:  # Minimum meaningful length
-                return reasoning[:500]  # Cap at 500 chars
+                return reasoning
     
     # Fallback: take last paragraph if it looks like reasoning
     paragraphs = text.strip().split('\n\n')
