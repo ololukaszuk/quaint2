@@ -300,7 +300,7 @@ class LLMAnalystService:
         """Log the analysis with rich formatting."""
         logger.info("")
         logger.info("=" * 80)
-        logger.info(f"🤖 LLM ANALYSIS COMPLETE - {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        logger.info(f"🤖 LLM ANALYSIS COMPLETE - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
         logger.info("=" * 80)
         logger.info(f"Model: {response.model} | Time: {elapsed:.1f}s | Tokens: {response.eval_count} | Speed: {response.tokens_per_second:.1f} t/s")
         logger.info(f"Analysis interval: Every {self.config.analysis_interval_candles} closed 1m candles")
