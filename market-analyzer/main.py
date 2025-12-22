@@ -399,7 +399,7 @@ class MarketAnalyzerService:
                             pivot_s1_traditional, pivot_s2_traditional, pivot_s3_traditional,
                             pivot_r3_fibonacci, pivot_r2_fibonacci, pivot_r1_fibonacci,
                             pivot_s1_fibonacci, pivot_s2_fibonacci, pivot_s3_fibonacci,
-                            pivot_r4_camarilla, pivot_r3_camarilla, pivot pivot_s3_camarilla, pivot_s4_camarilla,
+                            pivot_r4_camarilla, pivot_r3_camarilla, pivot_s3_camarilla, pivot_s4_camarilla,
                             pivot_confluence_zones, price_vs_pivot,
                             smc_bias, price_zone, smc_price_zone, smc_equilibrium,
                             smc_order_blocks, smc_fvgs, smc_breaks, smc_liquidity,
