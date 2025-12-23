@@ -51,6 +51,16 @@ class Config:
     rsi_period: int = 14
     rsi_oversold: float = 30.0
     rsi_overbought: float = 70.0
+
+    # LLM Integration (database-driven)
+    llm_requests_enabled: bool = field(
+        default_factory=lambda: os.getenv("LLM_REQUESTS_ENABLED", "true").lower() == "true"
+    )
+    
+    # Logging control
+    detailed_logging: bool = field(
+        default_factory=lambda: os.getenv("DETAILED_LOGGING", "false").lower() == "true"
+    )
     
     # Health check
     health_port: int = field(default_factory=lambda: int(os.getenv("HEALTH_PORT", "8082")))

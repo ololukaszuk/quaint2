@@ -20,6 +20,7 @@ from config import Config
 from database import Database
 from analyzer import MarketAnalyzer
 from models import MarketContext
+from llm_controller import LLMController
 
 
 # Configure loguru
@@ -50,6 +51,7 @@ class MarketAnalyzerService:
         self.config = Config()
         self.db: Optional[Database] = None
         self.analyzer: Optional[MarketAnalyzer] = None
+        self.llm_controller: Optional[LLMController] = None
         self.running = False
         self.last_candle_time: Optional[datetime] = None
         
@@ -87,6 +89,10 @@ class MarketAnalyzerService:
         
         self.running = True
         logger.info(f"Polling for new candles every {self.config.poll_interval_seconds}s")
+        
+        # Initialize LLM controller
+        self.llm_controller = LLMController(self.config)
+        logger.info(f"LLM Analyst: {'enabled' if self.config.llm_analyst_enabled else 'disabled'}")
         
         # Main loop
         while self.running:
@@ -140,42 +146,50 @@ class MarketAnalyzerService:
             
         try:
             context = await self.analyzer.analyze()
-            if context:
-                # Check for signal change
-                signal_changed = self.detect_signal_change(context)
-                
-                # Log full report
+            if not context:
+                return
+            
+            # Check for signal change
+            signal_changed = self.detect_signal_change(context)
+            
+            # Log results (with toggle)
+            if self.config.detailed_logging:
                 self.log_market_context(context, signal_changed)
+            else:
+                self.log_market_context_brief(context, signal_changed)
+            
+            # Save analysis with actual timestamp
+            previous_type_for_save = self.previous_signal_type
+            previous_dir_for_save = self.previous_signal_direction
+            
+            if context.signal:
+                current_type = context.signal.signal_type.value
+                current_direction = context.signal.direction
                 
-                # We need to pass the previous values to save_analysis
-                previous_type_for_save = self.previous_signal_type
-                previous_dir_for_save = self.previous_signal_direction
+                if signal_changed and self.config.detailed_logging:
+                    logger.debug(f"Signal transition: {previous_type_for_save} ({previous_dir_for_save}) → {current_type} ({current_direction})")
                 
-                # This ensures next iteration has correct previous values
-                if context.signal:
-                    current_type = context.signal.signal_type.value
-                    current_direction = context.signal.direction
-                    
-                    # Log the transition for debugging
-                    if signal_changed:
-                        logger.debug(f"Signal transition: {previous_type_for_save} ({previous_dir_for_save}) → {current_type} ({current_direction})")
-                    
-                    # Update tracking variables for next iteration
-                    self.previous_signal_type = current_type
-                    self.previous_signal_direction = current_direction
+                self.previous_signal_type = current_type
+                self.previous_signal_direction = current_direction
+            
+            await self.save_analysis(
+                context, 
+                signal_changed,
+                previous_type_for_save,
+                previous_dir_for_save
+            )
+            
+            # NEW: Check if LLM analysis would add value
+            trigger_reason = await self.should_request_llm_analysis(context, signal_changed)
+            if trigger_reason:
+                await self.request_llm_analysis(context, trigger_reason)
                 
-                await self.save_analysis(
-                    context, 
-                    signal_changed,
-                    previous_type_for_save,
-                    previous_dir_for_save
-                )
-                    
         except Exception as e:
-            logger.error(f"Analysis error: {e}")
-            import traceback
-            traceback.print_exc()
-    
+            logger.error(f"Error in analysis: {e}")
+            if self.config.detailed_logging:
+                import traceback
+                traceback.print_exc()
+                
     def detect_signal_change(self, ctx: MarketContext) -> bool:
         """Check if signal has changed from previous analysis."""
         if not ctx.signal or ctx.signal.direction == "NONE":
@@ -437,7 +451,7 @@ class MarketAnalyzerService:
                         )
                         """,
                         # $1-$5: Basic price & signal
-                        ctx.timestamp, to_python(ctx.current_price),
+                        datetime.now(timezone.utc), to_python(ctx.current_price),
                         signal.signal_type.value if signal else None,
                         signal.direction if signal else None,
                         to_python(signal.confidence) if signal else None,
@@ -522,7 +536,7 @@ class MarketAnalyzerService:
                                 key_reasons, signal_factors, smc_bias, pivot_daily, nearest_support, nearest_resistance
                             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
                         """,
-                            ctx.timestamp, signal.signal_type.value, signal.direction, to_python(signal.confidence),
+                            datetime.now(timezone.utc), signal.signal_type.value, signal.direction, to_python(signal.confidence),
                             to_python(ctx.current_price),
                             to_python(signal.setup.entry if signal.setup else None),
                             to_python(signal.setup.stop_loss if signal.setup else None),
@@ -542,7 +556,77 @@ class MarketAnalyzerService:
             logger.error(f"Error saving analysis: {e}")
             import traceback
             traceback.print_exc()
+
+    async def should_request_llm_analysis(
+        self, 
+        ctx: MarketContext,
+        signal_changed: bool
+    ) -> Optional[str]:
+        """
+        Decide if LLM commentary would add value.
         
+        Returns trigger reason if yes, None if no.
+        """
+        if not self.config.llm_requests_enabled:
+            return None
+        
+        # Reason 1: Significant signal change
+        if signal_changed and ctx.signal and ctx.signal.direction != "NONE":
+            return "signal_change"
+        
+        # Reason 2: At major pivot level (within 0.3%)
+        if ctx.pivots:
+            pivot = ctx.pivots.traditional.pivot
+            distance_pct = abs((ctx.current_price - pivot) / pivot * 100)
+            if distance_pct < 0.3:
+                return "key_level_pivot"
+        
+        # Reason 3: Conflicting timeframe signals
+        if ctx.trends:
+            trends = [t.direction for t in ctx.trends.values()]
+            if "UPTREND" in trends and "DOWNTREND" in trends:
+                return "timeframe_conflict"
+        
+        # Reason 4: Testing major support/resistance (within 0.3%)
+        if ctx.support_levels and ctx.resistance_levels:
+            nearest_support = ctx.support_levels[0].price
+            nearest_resistance = ctx.resistance_levels[0].price
+            dist_support = abs((ctx.current_price - nearest_support) / ctx.current_price * 100)
+            dist_resistance = abs((ctx.current_price - nearest_resistance) / ctx.current_price * 100)
+            if dist_support < 0.3:
+                return "testing_support"
+            if dist_resistance < 0.3:
+                return "testing_resistance"
+        
+        return None
+
+    async def request_llm_analysis(
+        self,
+        ctx: MarketContext,
+        trigger_reason: str
+    ):
+        """Insert LLM request into database for llm-analyst to process."""
+        if not self.db or not self.db.pool:
+            return
+        
+        try:
+            async with self.db.pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO llm_requests (
+                        request_time, price, signal_type, signal_direction, trigger_reason, status
+                    ) VALUES ($1, $2, $3, $4, $5, 'pending')
+                    """,
+                    datetime.now(timezone.utc),
+                    ctx.current_price,
+                    ctx.signal.signal_type.value if ctx.signal else None,
+                    ctx.signal.direction if ctx.signal else None,
+                    trigger_reason
+                )
+                logger.info(f"🎯 LLM request queued: {trigger_reason}")
+        except Exception as e:
+            logger.warning(f"Failed to queue LLM request: {e}")
+
     def get_price_zone(self, ctx: MarketContext) -> str:
         """Get current price zone from SMC analysis."""
         if not ctx.smc:
@@ -712,7 +796,32 @@ class MarketAnalyzerService:
         
         logger.info("=" * 80)
         logger.info("")
-    
+
+    def log_market_context_brief(self, ctx: MarketContext, signal_changed: bool):
+        """Brief logging when detailed_logging=false."""
+        timestamp = datetime.now(timezone.utc).strftime('%H:%M:%S')
+        
+        # Signal emoji
+        if ctx.signal:
+            if ctx.signal.direction == "LONG":
+                signal_emoji = "🟢"
+            elif ctx.signal.direction == "SHORT":
+                signal_emoji = "🔴"
+            else:
+                signal_emoji = "⚪"
+        else:
+            signal_emoji = "⚪"
+        
+        # Change indicator
+        change_flag = "🔔" if signal_changed else ""
+        
+        # Brief one-liner
+        logger.info(
+            f"{timestamp} | {signal_emoji} ${ctx.current_price:,.0f} | "
+            f"{ctx.signal.signal_type.value if ctx.signal else 'NEUTRAL'} "
+            f"({ctx.signal.confidence:.0f}%) {change_flag}"
+        )
+
     def log_signal(self, signal):
         """Log trading signal prominently."""
         # Big signal banner

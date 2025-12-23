@@ -34,6 +34,11 @@ class Config:
     # Health check
     health_port: int = field(default_factory=lambda: int(os.getenv("HEALTH_PORT", "8083")))
     
+    # Logging control
+    detailed_logging: bool = field(
+        default_factory=lambda: os.getenv("DETAILED_LOGGING", "false").lower() == "true"
+    )
+
     @property
     def db_url(self) -> str:
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"

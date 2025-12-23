@@ -124,22 +124,60 @@ class LLMAnalystService:
                 await asyncio.sleep(30)
     
     async def check_for_trigger(self):
-        """Check if we should run analysis based on candle count."""
-        if not self.last_analysis_candle_time:
-            self.last_analysis_candle_time = await self.db.get_latest_candle_time()
+        """Check for pending LLM analysis requests."""
+        if not self.db or not self.db.pool:
             return
         
-        # Count new candles since last analysis
-        new_candles = await self.db.get_candle_count_since(self.last_analysis_candle_time)
-        
-        if new_candles >= self.config.analysis_interval_candles:
-            logger.info(f"📊 Trigger: {new_candles} new candles since last analysis")
-            
-            # Update tracking
-            self.last_analysis_candle_time = await self.db.get_latest_candle_time()
-            
-            # Run analysis
-            await self.run_analysis()
+        try:
+            async with self.db.pool.acquire() as conn:
+                # Get oldest pending request
+                request = await conn.fetchrow(
+                    """
+                    SELECT id, request_time, price, signal_type, signal_direction, trigger_reason
+                    FROM llm_requests
+                    WHERE status = 'pending'
+                    ORDER BY request_time ASC
+                    LIMIT 1
+                    """
+                )
+                
+                if not request:
+                    return
+                
+                req_id = request['id']
+                logger.info(f"📥 Processing request #{req_id} ({request['trigger_reason']})")
+                
+                # Mark as processing
+                await conn.execute(
+                    "UPDATE llm_requests SET status = 'processing' WHERE id = $1",
+                    req_id
+                )
+                
+                # Run analysis
+                await self.run_analysis()
+                
+                # Mark as completed
+                await conn.execute(
+                    """
+                    UPDATE llm_requests 
+                    SET status = 'completed', processed_at = NOW() 
+                    WHERE id = $1
+                    """,
+                    req_id
+                )
+                logger.info(f"✅ Request #{req_id} completed")
+                
+        except Exception as e:
+            logger.error(f"Error processing request: {e}")
+            if 'req_id' in locals():
+                try:
+                    async with self.db.pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE llm_requests SET status = 'failed', error_message = $2 WHERE id = $1",
+                            req_id, str(e)
+                        )
+                except:
+                    pass
     
     async def run_analysis(self):
         """Run full LLM analysis with enhanced data and self-assessment."""
@@ -225,9 +263,12 @@ class LLMAnalystService:
             
             elapsed = time.time() - start_time
             
-            # Log the analysis
-            self.log_analysis(parsed, response, current_price, elapsed, market_analysis, past_predictions)
-            
+            # Log the analysis (toggle between brief/detailed)
+            if self.config.detailed_logging:
+                self.log_analysis(parsed, response, current_price, elapsed, market_analysis, past_predictions)
+            else:
+                self.log_analysis_brief(parsed, response, current_price, elapsed)
+
             # Save to database
             await self.save_analysis_to_db(
                 parsed=parsed,
@@ -265,8 +306,8 @@ class LLMAnalystService:
             elif parsed.direction == "BEARISH":
                 # Bearish prediction should have invalidation ABOVE current price
                 if parsed.invalidation_level < current_price:
-                    logger.warning(f"⚠️ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
-                    # Use critical resistance or calculate from price
+                    if self.config.detailed_logging:
+                        logger.warning(f"⚠️ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
                     if parsed.critical_resistance and parsed.critical_resistance > current_price:
                         parsed.invalidation_level = parsed.critical_resistance * 1.002
                     else:
@@ -303,7 +344,7 @@ class LLMAnalystService:
         logger.info(f"🤖 LLM ANALYSIS COMPLETE - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
         logger.info("=" * 80)
         logger.info(f"Model: {response.model} | Time: {elapsed:.1f}s | Tokens: {response.eval_count} | Speed: {response.tokens_per_second:.1f} t/s")
-        logger.info(f"Analysis interval: Every {self.config.analysis_interval_candles} closed 1m candles")
+        logger.info("Analysis triggered by market-analyzer via llm_requests table")
         logger.info("")
         
         # Show past accuracy if available
@@ -421,7 +462,37 @@ class LLMAnalystService:
         logger.info("")
         logger.info("=" * 80)
         logger.info("")
-    
+
+    def log_analysis_brief(
+        self,
+        parsed: ParsedAnalysis,
+        response: LLMResponse,
+        current_price: float,
+        elapsed: float,
+    ):
+        """Brief one-line logging for production."""
+        timestamp = datetime.now(timezone.utc).strftime('%H:%M:%S')
+        
+        # Direction emoji
+        if parsed.direction == "BULLISH":
+            emoji = "🟢"
+        elif parsed.direction == "BEARISH":
+            emoji = "🔴"
+        else:
+            emoji = "⚪"
+        
+        # Show 1h target and change
+        if parsed.price_1h:
+            change_pct = (parsed.price_1h - current_price) / current_price * 100
+            target_str = f"→ ${parsed.price_1h:,.0f} ({change_pct:+.2f}%)"
+        else:
+            target_str = "→ N/A"
+        
+        logger.info(
+            f"{timestamp} | 🤖 {emoji} {parsed.direction} {parsed.confidence} | "
+            f"${current_price:,.0f} {target_str} | {elapsed:.1f}s"
+        )
+
     async def save_analysis_to_db(
         self,
         parsed: ParsedAnalysis,
