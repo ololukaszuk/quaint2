@@ -24,7 +24,7 @@ import json
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 from loguru import logger
@@ -167,7 +167,8 @@ class LLMAnalystService:
                 return
             
             # Check fulfillment
-            if (fulfillment := self.check_fulfillment(current_price)):
+            fulfillment = await self.check_fulfillment(current_price)
+            if fulfillment:
                 logger.info(f"✅ TARGET HIT: {fulfillment}")
                 await self.run_new_analysis(f"fulfilled:{fulfillment}")
                 return
@@ -284,28 +285,106 @@ class LLMAnalystService:
         
         return None
 
-    def check_fulfillment(self, current_price: float) -> Optional[str]:
-        """Check if target reached."""
-        if not self.active_prediction:
+    async def check_fulfillment(self, current_price: float) -> Optional[str]:
+        """
+        Check if target reached by querying actual price history.
+        
+        Queries database to see if price ever reached the target during
+        the predicted time window, not just current price.
+        """
+        if not self.active_prediction or not self.db or not self.db.pool:
             return None
         
+        pred_time = self.active_prediction['analysis_time']
         direction = self.active_prediction['prediction_direction']
         target_1h = self.active_prediction.get('predicted_price_1h')
         target_4h = self.active_prediction.get('predicted_price_4h')
         
-        # Check 4h target first (higher priority)
-        if target_4h:
-            target_4h = float(target_4h)
-            if (direction == "BULLISH" and current_price >= target_4h) or \
-            (direction == "BEARISH" and current_price <= target_4h):
-                return f"4h target ${target_4h:,.0f} reached (${current_price:,.0f})"
+        # Calculate time elapsed since prediction
+        now = datetime.now(timezone.utc)
+        hours_elapsed = (now - pred_time).total_seconds() / 3600
+        minutes_elapsed = hours_elapsed * 60
         
-        # Check 1h target
-        if target_1h:
+        # Check 4h target (window: 3.5 to 4.5 hours)
+        if target_4h and 3.5 <= hours_elapsed <= 4.5:
+            target_4h = float(target_4h)
+            
+            try:
+                async with self.db.pool.acquire() as conn:
+                    if direction == "BULLISH":
+                        # Check if price ever went above target
+                        max_price = await conn.fetchval(
+                            """
+                            SELECT MAX(high) 
+                            FROM candles_1m 
+                            WHERE time >= $1 AND time <= $2
+                            """,
+                            pred_time,
+                            now
+                        )
+                        
+                        if max_price and max_price >= target_4h:
+                            return f"4h target ${target_4h:,.0f} reached after {hours_elapsed:.1f}h (peak: ${max_price:,.0f})"
+                    
+                    else:  # BEARISH
+                        # Check if price ever went below target
+                        min_price = await conn.fetchval(
+                            """
+                            SELECT MIN(low) 
+                            FROM candles_1m 
+                            WHERE time >= $1 AND time <= $2
+                            """,
+                            pred_time,
+                            now
+                        )
+                        
+                        if min_price and min_price <= target_4h:
+                            return f"4h target ${target_4h:,.0f} reached after {hours_elapsed:.1f}h (low: ${min_price:,.0f})"
+            
+            except Exception as e:
+                logger.error(f"Error checking 4h target: {e}")
+        
+        # Check 1h target (window: 50 to 70 minutes)
+        if target_1h and 50 <= minutes_elapsed <= 70:
             target_1h = float(target_1h)
-            if (direction == "BULLISH" and current_price >= target_1h) or \
-            (direction == "BEARISH" and current_price <= target_1h):
-                return f"1h target ${target_1h:,.0f} reached (${current_price:,.0f})"
+            
+            # Calculate 1 hour timestamp
+            one_hour_ago = pred_time + timedelta(hours=1)
+            
+            try:
+                async with self.db.pool.acquire() as conn:
+                    if direction == "BULLISH":
+                        # Check if price went above target in first hour
+                        max_price = await conn.fetchval(
+                            """
+                            SELECT MAX(high) 
+                            FROM candles_1m 
+                            WHERE time >= $1 AND time <= $2
+                            """,
+                            pred_time,
+                            one_hour_ago + timedelta(minutes=10)  # 10 min buffer
+                        )
+                        
+                        if max_price and max_price >= target_1h:
+                            return f"1h target ${target_1h:,.0f} reached after {minutes_elapsed:.0f}m (peak: ${max_price:,.0f})"
+                    
+                    else:  # BEARISH
+                        # Check if price went below target in first hour
+                        min_price = await conn.fetchval(
+                            """
+                            SELECT MIN(low) 
+                            FROM candles_1m 
+                            WHERE time >= $1 AND time <= $2
+                            """,
+                            pred_time,
+                            one_hour_ago + timedelta(minutes=10)  # 10 min buffer
+                        )
+                        
+                        if min_price and min_price <= target_1h:
+                            return f"1h target ${target_1h:,.0f} reached after {minutes_elapsed:.0f}m (low: ${min_price:,.0f})"
+            
+            except Exception as e:
+                logger.error(f"Error checking 1h target: {e}")
         
         return None
 
