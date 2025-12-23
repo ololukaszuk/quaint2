@@ -222,22 +222,46 @@ class LLMAnalystService:
             return None
 
     async def check_pending_request(self) -> Optional[dict]:
-        """Check for market-analyzer request."""
+        """
+        Check for market-analyzer request.
+        Only processes LATEST request, marks older ones as superseded.
+        """
         if not self.db or not self.db.pool:
             return None
         
         try:
             async with self.db.pool.acquire() as conn:
+                # Get the LATEST pending request
                 row = await conn.fetchrow(
                     """
-                    SELECT id, trigger_reason
+                    SELECT id, trigger_reason, request_time
                     FROM llm_requests
                     WHERE status = 'pending'
-                    ORDER BY request_time ASC
+                    ORDER BY request_time DESC  # Latest first!
                     LIMIT 1
                     """
                 )
-                return dict(row) if row else None
+                
+                if not row:
+                    return None
+                
+                latest_id = row['id']
+                
+                # Mark ALL other pending requests as superseded
+                superseded_count = await conn.fetchval(
+                    """
+                    UPDATE llm_requests 
+                    SET status = 'superseded', processed_at = NOW()
+                    WHERE status = 'pending' AND id != $1
+                    RETURNING COUNT(*)
+                    """,
+                    latest_id
+                )
+                
+                if superseded_count and superseded_count > 0:
+                    logger.info(f"🗑️  Marked {superseded_count} old requests as superseded")
+                
+                return dict(row)
         except Exception as e:
             logger.error(f"Error checking requests: {e}")
             return None
@@ -306,7 +330,7 @@ class LLMAnalystService:
         return None
 
     async def process_request(self, request_id: int):
-        """Process market-analyzer request."""
+        """Process market-analyzer request and clean up old entries."""
         try:
             async with self.db.pool.acquire() as conn:
                 await conn.execute(
@@ -317,6 +341,7 @@ class LLMAnalystService:
             await self.run_analysis()
             
             async with self.db.pool.acquire() as conn:
+                # Mark as completed
                 await conn.execute(
                     """
                     UPDATE llm_requests 
@@ -325,9 +350,23 @@ class LLMAnalystService:
                     """,
                     request_id
                 )
+                
+                # Optional: Clean up old completed/superseded requests (keep last 100)
+                await conn.execute(
+                    """
+                    DELETE FROM llm_requests
+                    WHERE id NOT IN (
+                        SELECT id FROM llm_requests
+                        ORDER BY request_time DESC
+                        LIMIT 100
+                    )
+                    AND status IN ('completed', 'superseded', 'failed')
+                    """
+                )
             
             self.active_prediction = await self.load_active_prediction()
             logger.info(f"✅ Request #{request_id} completed")
+            
         except Exception as e:
             logger.error(f"Error processing request: {e}")
             try:

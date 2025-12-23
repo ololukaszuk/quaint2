@@ -764,6 +764,13 @@ class MarketAnalyzerService:
         if not self.db or not self.db.pool:
             return
         
+        # Debounce: Don't create requests more than once per 30 seconds
+        if self.last_llm_request_time:
+            seconds_since = (datetime.now(timezone.utc) - self.last_llm_request_time).total_seconds()
+            if seconds_since < 30:
+                logger.debug(f"⏸️  Debounce: Only {seconds_since:.0f}s since last LLM request")
+                return
+        
         try:
             async with self.db.pool.acquire() as conn:
                 await conn.execute(
