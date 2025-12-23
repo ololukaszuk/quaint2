@@ -670,14 +670,88 @@ class MarketAnalyzerService:
         ctx: MarketContext,
         signal_changed: bool
     ) -> Optional[str]:
-        """Request LLM only for significant signal changes (>60% confidence)."""
+        """
+        Request LLM when its analysis would add unique value.
+        
+        LLM runs when:
+        1. Market-analyzer uncertain + at critical level
+        2. New directional signal (confidence > 55%)
+        3. Market structure break (BOS/CHoCH)
+        4. Conflicting signals (e.g., LONG signal but BEARISH SMC)
+        5. High-impact events (liquidity sweeps, multiple FVGs)
+        """
         if not self.config.llm_requests_enabled:
             return None
         
-        # Only trigger for significant changes with high confidence
-        if signal_changed and ctx.signal and ctx.signal.direction != "NONE":
-            if ctx.signal.confidence > 60:
-                return "significant_signal_change"
+        signal = ctx.signal
+        
+        # === CONDITION 1: Market-Analyzer Uncertain ===
+        if signal.direction == "NONE" or signal.confidence < 30:
+            # Check if at critical decision point
+            at_critical = False
+            
+            # Near pivot
+            if ctx.pivots:
+                pivot_dist = abs((ctx.current_price - ctx.pivots.traditional.pivot) / ctx.current_price * 100)
+                if pivot_dist < 0.5:
+                    at_critical = True
+            
+            # Near major S/R
+            if ctx.support_levels and ctx.resistance_levels:
+                sup_dist = abs((ctx.current_price - ctx.support_levels[0].price) / ctx.current_price * 100)
+                res_dist = abs((ctx.current_price - ctx.resistance_levels[0].price) / ctx.current_price * 100)
+                if sup_dist < 0.5 or res_dist < 0.5:
+                    at_critical = True
+            
+            if at_critical:
+                return "uncertain_at_critical_level"
+        
+        # === CONDITION 2: New Directional Signal ===
+        if signal_changed and signal.direction != "NONE":
+            if signal.confidence > 55:  # Any tradeable confidence
+                return "new_directional_signal"
+        
+        # === CONDITION 3: Market Structure Break ===
+        if ctx.smc and ctx.smc.breaks:
+            # Check for recent breaks (last in the list)
+            recent_breaks = ctx.smc.breaks[:2]  # Last 2 breaks
+            for brk in recent_breaks:
+                if brk.get('type') in ['BOS', 'CHoCH']:
+                    return f"structure_break_{brk.get('type').lower()}"
+        
+        # === CONDITION 4: Conflicting Signals ===
+        if signal.direction != "NONE" and ctx.smc:
+            # LONG signal but BEARISH SMC
+            if signal.direction == "LONG" and ctx.smc.current_bias == "BEARISH":
+                return "long_signal_bearish_smc"
+            
+            # SHORT signal but BULLISH SMC
+            if signal.direction == "SHORT" and ctx.smc.current_bias == "BULLISH":
+                return "short_signal_bullish_smc"
+            
+            # Buying at PREMIUM or Selling at DISCOUNT
+            if signal.direction == "LONG" and ctx.smc.price_zone == "PREMIUM":
+                return "buying_at_premium"
+            
+            if signal.direction == "SHORT" and ctx.smc.price_zone == "DISCOUNT":
+                return "selling_at_discount"
+        
+        # === CONDITION 5: Conflicting Timeframes ===
+        # Only trigger if signal exists AND timeframes conflict
+        if signal.direction != "NONE" and ctx.trends:
+            trends = [t.direction for t in ctx.trends.values()]
+            has_uptrend = "UPTREND" in trends
+            has_downtrend = "DOWNTREND" in trends
+            
+            if has_uptrend and has_downtrend:
+                # Only care about conflicts if we have a signal
+                return "timeframe_conflict"
+        
+        # === CONDITION 6: Multiple Fair Value Gaps ===
+        if ctx.smc and ctx.smc.fvgs:
+            unfilled_fvgs = [fvg for fvg in ctx.smc.fvgs if fvg.get('unfilled', False)]
+            if len(unfilled_fvgs) >= 3:
+                return "multiple_imbalances"
         
         return None
 
