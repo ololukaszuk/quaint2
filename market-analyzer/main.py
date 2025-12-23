@@ -86,11 +86,7 @@ class MarketAnalyzerService:
         
         self.running = True
         logger.info(f"Polling for new candles every {self.config.poll_interval_seconds}s")
-        
-        # Initialize LLM controller
-        self.llm_controller = LLMController(self.config)
-        logger.info(f"LLM Analyst: {'enabled' if self.config.llm_analyst_enabled else 'disabled'}")
-        
+                
         # Main loop
         while self.running:
             try:
@@ -364,7 +360,7 @@ class MarketAnalyzerService:
                             $73,$74
                         )
                     """,
-                        ctx.timestamp, to_python(ctx.current_price),
+                        datetime.now(timezone.utc), to_python(ctx.current_price),
                         signal.signal_type.value if signal else None, signal.direction if signal else None,
                         to_python(signal.confidence) if signal else None,
                         to_python(signal.setup.entry if signal and signal.setup else None),
