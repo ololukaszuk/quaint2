@@ -56,6 +56,9 @@ class MarketAnalyzerService:
         self.previous_signal_type: Optional[str] = None
         self.previous_signal_direction: Optional[str] = None
       
+        # Track active signal state
+        self.active_signal: Optional[dict] = None
+
     async def start(self):
         """Initialize and start the service."""
         logger.info("=" * 60)
@@ -133,7 +136,7 @@ class MarketAnalyzerService:
             await self.run_analysis()
     
     async def run_analysis(self):
-        """Run full market analysis and log results."""
+        """Run full market analysis with state-based signal management."""
         if not self.analyzer:
             return
             
@@ -142,40 +145,75 @@ class MarketAnalyzerService:
             if not context:
                 return
             
-            # Check for signal change
-            signal_changed = self.detect_signal_change(context)
+            # Load active signal if not cached
+            if not self.active_signal:
+                self.active_signal = await self.load_active_signal()
             
-            # Log results (with toggle)
+            # Check if active signal should be invalidated/fulfilled
+            signal_event = None
+            if self.active_signal:
+                # Check invalidation (SL hit or structure break)
+                if (invalidation := self.check_signal_invalidation(context)):
+                    logger.info(f"🚨 Signal INVALIDATED: {invalidation}")
+                    signal_event = "invalidated"
+                    self.active_signal = None
+                
+                # Check fulfillment (TP hit)
+                elif (fulfillment := self.check_signal_fulfillment(context)):
+                    logger.info(f"✅ Signal FULFILLED: {fulfillment}")
+                    signal_event = "fulfilled"
+                    self.active_signal = None
+            
+            # Determine if we should create new signal
+            signal_changed = False
+            should_insert_signal = False
+            
+            if not self.active_signal and context.signal and context.signal.direction != "NONE":
+                # No active signal - create new one
+                should_insert_signal = True
+                signal_changed = True
+                logger.info(f"📍 New signal: {context.signal.signal_type.value} ({context.signal.confidence:.0f}%)")
+            elif self.active_signal and context.signal:
+                # Check if signal changed significantly
+                current_type = context.signal.signal_type.value
+                current_direction = context.signal.direction
+                
+                prev_type = self.previous_signal_type
+                prev_direction = self.previous_signal_direction
+                
+                # Signal changed if type or direction changed
+                if current_type != prev_type or current_direction != prev_direction:
+                    should_insert_signal = True
+                    signal_changed = True
+                    logger.info(f"🔄 Signal changed: {prev_type}/{prev_direction} -> {current_type}/{current_direction}")
+            
+            # Update tracking if signal will be inserted
+            if should_insert_signal and context.signal:
+                self.previous_signal_type = context.signal.signal_type.value
+                self.previous_signal_direction = context.signal.direction
+                
+                # Request LLM for significant changes (>60% confidence)
+                if context.signal.confidence > 60:
+                    await self.request_llm_analysis(context, "significant_signal_change")
+            
+            # Save analysis (this includes conditional signal INSERT)
+            await self.save_analysis(
+                context, 
+                signal_changed,
+                self.previous_signal_type,
+                self.previous_signal_direction,
+                should_insert_signal  # NEW PARAMETER
+            )
+            
+            # Reload active signal if we inserted one
+            if should_insert_signal:
+                self.active_signal = await self.load_active_signal()
+            
+            # Log
             if self.config.detailed_logging:
                 self.log_market_context(context, signal_changed)
             else:
                 self.log_market_context_brief(context, signal_changed)
-            
-            # Save analysis with actual timestamp
-            previous_type_for_save = self.previous_signal_type
-            previous_dir_for_save = self.previous_signal_direction
-            
-            if context.signal:
-                current_type = context.signal.signal_type.value
-                current_direction = context.signal.direction
-                
-                if signal_changed and self.config.detailed_logging:
-                    logger.debug(f"Signal transition: {previous_type_for_save} ({previous_dir_for_save}) → {current_type} ({current_direction})")
-                
-                self.previous_signal_type = current_type
-                self.previous_signal_direction = current_direction
-            
-            await self.save_analysis(
-                context, 
-                signal_changed,
-                previous_type_for_save,
-                previous_dir_for_save
-            )
-            
-            # NEW: Check if LLM analysis would add value
-            trigger_reason = await self.should_request_llm_analysis(context, signal_changed)
-            if trigger_reason:
-                await self.request_llm_analysis(context, trigger_reason)
                 
         except Exception as e:
             logger.error(f"Error in analysis: {e}")
@@ -201,13 +239,93 @@ class MarketAnalyzerService:
         # WEAK_BUY→WEAK_BUY (identical) = NOT recorded ✅
         return (current_type != self.previous_signal_type or
                 current_direction != self.previous_signal_direction)
-    
+
+    async def load_active_signal(self) -> Optional[dict]:
+        """Load most recent signal from database."""
+        if not self.db or not self.db.pool:
+            return None
+        
+        try:
+            async with self.db.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT 
+                        signal_time, signal_type, signal_direction, price,
+                        entry_price, stop_loss, 
+                        take_profit_1, take_profit_2, take_profit_3
+                    FROM market_signals
+                    ORDER BY signal_time DESC
+                    LIMIT 1
+                    """
+                )
+                if row:
+                    self.previous_signal_type = row['signal_type']
+                    self.previous_signal_direction = row['signal_direction']
+                    return dict(row)
+                return None
+        except Exception as e:
+            logger.error(f"Error loading active signal: {e}")
+            return None
+
+    def check_signal_invalidation(self, ctx: MarketContext) -> Optional[str]:
+        """Check if active signal invalidated (SL hit or structure break)."""
+        if not self.active_signal:
+            return None
+        
+        sl = self.active_signal.get('stop_loss')
+        if not sl:
+            return None
+        
+        sl = float(sl)
+        direction = self.active_signal['signal_direction']
+        
+        # Check stop loss
+        if direction == "LONG" and ctx.current_price <= sl:
+            return f"SL ${sl:,.0f} hit (price: ${ctx.current_price:,.0f})"
+        elif direction == "SHORT" and ctx.current_price >= sl:
+            return f"SL ${sl:,.0f} hit (price: ${ctx.current_price:,.0f})"
+        
+        # Check structure break
+        if ctx.smc and ctx.smc.breaks:
+            for brk in ctx.smc.breaks:
+                if brk.get('type') in ['BOS', 'CHoCH']:
+                    brk_dir = brk.get('direction')
+                    if (direction == "LONG" and brk_dir == "BEARISH") or \
+                    (direction == "SHORT" and brk_dir == "BULLISH"):
+                        return f"Structure {brk.get('type')} ({brk_dir})"
+        
+        return None
+
+    def check_signal_fulfillment(self, ctx: MarketContext) -> Optional[str]:
+        """Check if any take profit reached."""
+        if not self.active_signal:
+            return None
+        
+        direction = self.active_signal['signal_direction']
+        
+        # Check TPs in priority order
+        for tp_name in ['take_profit_3', 'take_profit_2', 'take_profit_1']:
+            tp = self.active_signal.get(tp_name)
+            if not tp:
+                continue
+            
+            tp = float(tp)
+            tp_label = tp_name.replace('_', ' ').upper()
+            
+            if direction == "LONG" and ctx.current_price >= tp:
+                return f"{tp_label} ${tp:,.0f} hit (price: ${ctx.current_price:,.0f})"
+            elif direction == "SHORT" and ctx.current_price <= tp:
+                return f"{tp_label} ${tp:,.0f} hit (price: ${ctx.current_price:,.0f})"
+        
+        return None
+
     async def save_analysis(
         self, 
         ctx: MarketContext, 
         signal_changed: bool,
         previous_type: Optional[str] = None,
-        previous_direction: Optional[str] = None
+        previous_direction: Optional[str] = None,
+        should_insert_signal: bool = False  # NEW PARAMETER
     ):
         """Save analysis to database with ALL pivot columns."""
         if not self.db or not self.db.pool:
@@ -515,35 +633,32 @@ class MarketAnalyzerService:
                         self.generate_summary(ctx), signal_changed, previous_type
                     )
 
-                # Insert signal if changed
-                if signal and signal.direction != "NONE":
-                    current_type = signal.signal_type.value
-                    current_direction = signal.direction
-                    if previous_type != current_type or previous_direction != current_direction:
-                        logger.info(f"💾 Signal change: {previous_type}({previous_direction}) → {current_type}({current_direction})")
-                        await conn.execute("""
-                            INSERT INTO market_signals (
-                                signal_time, signal_type, signal_direction, signal_confidence, price,
-                                entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
-                                risk_reward_ratio, previous_signal_type, previous_direction, summary,
-                                key_reasons, signal_factors, smc_bias, pivot_daily, nearest_support, nearest_resistance
-                            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-                        """,
-                            datetime.now(timezone.utc), signal.signal_type.value, signal.direction, to_python(signal.confidence),
-                            to_python(ctx.current_price),
-                            to_python(signal.setup.entry if signal.setup else None),
-                            to_python(signal.setup.stop_loss if signal.setup else None),
-                            to_python(signal.setup.take_profit_1 if signal.setup else None),
-                            to_python(signal.setup.take_profit_2 if signal.setup else None),
-                            to_python(signal.setup.take_profit_3 if signal.setup else None),
-                            to_python(signal.setup.risk_reward_ratio if signal.setup else None),
-                            previous_type, previous_direction, self.generate_summary(ctx),
-                            json.dumps(signal_factors), json.dumps(signal_factors),
-                            ctx.smc.current_bias if ctx.smc else None, to_python(t.pivot if t else None),
-                            float(support_levels[0]['price']) if support_levels else None,
-                            float(resistance_levels[0]['price']) if resistance_levels else None
-                        )
-                        logger.info("✅ Signal inserted")
+                # Only INSERT if run_analysis determined we should
+                if should_insert_signal:
+                    logger.info(f"💾 Inserting signal to market_signals")
+                    await conn.execute("""
+                        INSERT INTO market_signals (
+                            signal_time, signal_type, signal_direction, signal_confidence, price,
+                            entry_price, stop_loss, take_profit_1, take_profit_2, take_profit_3,
+                            risk_reward_ratio, previous_signal_type, previous_direction, summary,
+                            key_reasons, signal_factors, smc_bias, pivot_daily, nearest_support, nearest_resistance
+                        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+                    """,
+                        datetime.now(timezone.utc), signal.signal_type.value, signal.direction, to_python(signal.confidence),
+                        to_python(ctx.current_price),
+                        to_python(signal.setup.entry if signal.setup else None),
+                        to_python(signal.setup.stop_loss if signal.setup else None),
+                        to_python(signal.setup.take_profit_1 if signal.setup else None),
+                        to_python(signal.setup.take_profit_2 if signal.setup else None),
+                        to_python(signal.setup.take_profit_3 if signal.setup else None),
+                        to_python(signal.setup.risk_reward_ratio if signal.setup else None),
+                        previous_type, previous_direction, self.generate_summary(ctx),
+                        json.dumps(signal_factors), json.dumps(signal_factors),
+                        ctx.smc.current_bias if ctx.smc else None, to_python(t.pivot if t else None),
+                        float(support_levels[0]['price']) if support_levels else None,
+                        float(resistance_levels[0]['price']) if resistance_levels else None
+                    )
+                    logger.info("✅ Signal inserted")
                                 
         except Exception as e:
             logger.error(f"Error saving analysis: {e}")
@@ -555,41 +670,14 @@ class MarketAnalyzerService:
         ctx: MarketContext,
         signal_changed: bool
     ) -> Optional[str]:
-        """
-        Decide if LLM commentary would add value.
-        
-        Returns trigger reason if yes, None if no.
-        """
+        """Request LLM only for significant signal changes (>60% confidence)."""
         if not self.config.llm_requests_enabled:
             return None
         
-        # Reason 1: Significant signal change
+        # Only trigger for significant changes with high confidence
         if signal_changed and ctx.signal and ctx.signal.direction != "NONE":
-            return "signal_change"
-        
-        # Reason 2: At major pivot level (within 0.3%)
-        if ctx.pivots:
-            pivot = ctx.pivots.traditional.pivot
-            distance_pct = abs((ctx.current_price - pivot) / pivot * 100)
-            if distance_pct < 0.3:
-                return "key_level_pivot"
-        
-        # Reason 3: Conflicting timeframe signals
-        if ctx.trends:
-            trends = [t.direction for t in ctx.trends.values()]
-            if "UPTREND" in trends and "DOWNTREND" in trends:
-                return "timeframe_conflict"
-        
-        # Reason 4: Testing major support/resistance (within 0.3%)
-        if ctx.support_levels and ctx.resistance_levels:
-            nearest_support = ctx.support_levels[0].price
-            nearest_resistance = ctx.resistance_levels[0].price
-            dist_support = abs((ctx.current_price - nearest_support) / ctx.current_price * 100)
-            dist_resistance = abs((ctx.current_price - nearest_resistance) / ctx.current_price * 100)
-            if dist_support < 0.3:
-                return "testing_support"
-            if dist_resistance < 0.3:
-                return "testing_resistance"
+            if ctx.signal.confidence > 60:
+                return "significant_signal_change"
         
         return None
 

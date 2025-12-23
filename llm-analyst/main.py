@@ -58,6 +58,9 @@ class LLMAnalystService:
         # Track candles for interval triggering
         self.last_analysis_candle_time: Optional[datetime] = None
         self.candles_since_analysis: int = 0
+
+        # Track active prediction state
+        self.active_prediction: Optional[dict] = None
         
     async def start(self):
         """Initialize and start the service."""
@@ -124,60 +127,223 @@ class LLMAnalystService:
                 await asyncio.sleep(30)
     
     async def check_for_trigger(self):
-        """Check for pending LLM analysis requests."""
+        """
+        Smart trigger: check prediction state and market requests.
+        
+        Only run new analysis when:
+        1. Market-analyzer explicitly requests (pending llm_requests)
+        2. Active prediction invalidated (price crossed invalidation level)
+        3. Active prediction fulfilled (target reached)
+        4. Prediction stale (4h+ with 2%+ move)
+        """
         if not self.db or not self.db.pool:
             return
         
         try:
+            # Priority 1: Check for market-analyzer request
+            request = await self.check_pending_request()
+            if request:
+                logger.info(f"📥 Market request: {request['trigger_reason']}")
+                await self.process_request(request['id'])
+                return
+            
+            # Load active prediction if not cached
+            if not self.active_prediction:
+                self.active_prediction = await self.load_active_prediction()
+            
+            # If no active prediction, wait for market request
+            if not self.active_prediction:
+                return
+            
+            # Get current price
+            current_price = await self.get_current_price()
+            if not current_price:
+                return
+            
+            # Check invalidation
+            if (invalidation := self.check_invalidation(current_price)):
+                logger.info(f"🚨 INVALIDATED: {invalidation}")
+                await self.run_new_analysis(f"invalidated:{invalidation}")
+                return
+            
+            # Check fulfillment
+            if (fulfillment := self.check_fulfillment(current_price)):
+                logger.info(f"✅ TARGET HIT: {fulfillment}")
+                await self.run_new_analysis(f"fulfilled:{fulfillment}")
+                return
+            
+            # Check staleness
+            if (staleness := self.check_staleness(current_price)):
+                logger.info(f"⏰ STALE: {staleness}")
+                await self.run_new_analysis(f"stale:{staleness}")
+                return
+                
+        except Exception as e:
+            logger.error(f"Error in check_for_trigger: {e}")
+            import traceback
+            traceback.print_exc()
+            
+    async def load_active_prediction(self) -> Optional[dict]:
+        """Load most recent prediction from database."""
+        if not self.db or not self.db.pool:
+            return None
+        
+        try:
             async with self.db.pool.acquire() as conn:
-                # Get oldest pending request
-                request = await conn.fetchrow(
+                row = await conn.fetchrow(
                     """
-                    SELECT id, request_time, price, signal_type, signal_direction, trigger_reason
+                    SELECT 
+                        id, analysis_time, price, 
+                        prediction_direction, predicted_price_1h, predicted_price_4h,
+                        invalidation_level, critical_support, critical_resistance
+                    FROM llm_analysis
+                    ORDER BY analysis_time DESC
+                    LIMIT 1
+                    """
+                )
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"Error loading prediction: {e}")
+            return None
+
+    async def get_current_price(self) -> Optional[float]:
+        """Get latest BTC price."""
+        if not self.db or not self.db.pool:
+            return None
+        
+        try:
+            async with self.db.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT close FROM candles_1m ORDER BY time DESC LIMIT 1"
+                )
+                return float(row['close']) if row else None
+        except Exception as e:
+            logger.error(f"Error getting current price: {e}")
+            return None
+
+    async def check_pending_request(self) -> Optional[dict]:
+        """Check for market-analyzer request."""
+        if not self.db or not self.db.pool:
+            return None
+        
+        try:
+            async with self.db.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, trigger_reason
                     FROM llm_requests
                     WHERE status = 'pending'
                     ORDER BY request_time ASC
                     LIMIT 1
                     """
                 )
-                
-                if not request:
-                    return
-                
-                req_id = request['id']
-                logger.info(f"📥 Processing request #{req_id} ({request['trigger_reason']})")
-                
-                # Mark as processing
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"Error checking requests: {e}")
+            return None
+
+    def check_invalidation(self, current_price: float) -> Optional[str]:
+        """Check if price crossed invalidation level."""
+        if not self.active_prediction or not self.active_prediction.get('invalidation_level'):
+            return None
+        
+        inv_level = float(self.active_prediction['invalidation_level'])
+        direction = self.active_prediction['prediction_direction']
+        
+        if direction == "BULLISH" and current_price < inv_level:
+            pct = ((inv_level - current_price) / current_price) * 100
+            return f"price ${current_price:,.0f} < invalidation ${inv_level:,.0f} (-{pct:.2f}%)"
+        
+        if direction == "BEARISH" and current_price > inv_level:
+            pct = ((current_price - inv_level) / current_price) * 100
+            return f"price ${current_price:,.0f} > invalidation ${inv_level:,.0f} (+{pct:.2f}%)"
+        
+        return None
+
+    def check_fulfillment(self, current_price: float) -> Optional[str]:
+        """Check if target reached."""
+        if not self.active_prediction:
+            return None
+        
+        direction = self.active_prediction['prediction_direction']
+        target_1h = self.active_prediction.get('predicted_price_1h')
+        target_4h = self.active_prediction.get('predicted_price_4h')
+        
+        # Check 4h target first (higher priority)
+        if target_4h:
+            target_4h = float(target_4h)
+            if (direction == "BULLISH" and current_price >= target_4h) or \
+            (direction == "BEARISH" and current_price <= target_4h):
+                return f"4h target ${target_4h:,.0f} reached (${current_price:,.0f})"
+        
+        # Check 1h target
+        if target_1h:
+            target_1h = float(target_1h)
+            if (direction == "BULLISH" and current_price >= target_1h) or \
+            (direction == "BEARISH" and current_price <= target_1h):
+                return f"1h target ${target_1h:,.0f} reached (${current_price:,.0f})"
+        
+        return None
+
+    def check_staleness(self, current_price: float) -> Optional[str]:
+        """Check if prediction stale (4h+ with 2%+ move)."""
+        if not self.active_prediction:
+            return None
+        
+        pred_time = self.active_prediction['analysis_time']
+        pred_price = float(self.active_prediction['price'])
+        
+        hours_elapsed = (datetime.now(timezone.utc) - pred_time).total_seconds() / 3600
+        
+        if hours_elapsed < 4:
+            return None
+        
+        move_pct = abs((current_price - pred_price) / pred_price) * 100
+        
+        if move_pct > 2.0:
+            return f"{hours_elapsed:.1f}h, {move_pct:.2f}% move from ${pred_price:,.0f}"
+        
+        return None
+
+    async def process_request(self, request_id: int):
+        """Process market-analyzer request."""
+        try:
+            async with self.db.pool.acquire() as conn:
                 await conn.execute(
                     "UPDATE llm_requests SET status = 'processing' WHERE id = $1",
-                    req_id
+                    request_id
                 )
-                
-                # Run analysis
-                await self.run_analysis()
-                
-                # Mark as completed
+            
+            await self.run_analysis()
+            
+            async with self.db.pool.acquire() as conn:
                 await conn.execute(
                     """
                     UPDATE llm_requests 
                     SET status = 'completed', processed_at = NOW() 
                     WHERE id = $1
                     """,
-                    req_id
+                    request_id
                 )
-                logger.info(f"✅ Request #{req_id} completed")
-                
+            
+            self.active_prediction = await self.load_active_prediction()
+            logger.info(f"✅ Request #{request_id} completed")
         except Exception as e:
             logger.error(f"Error processing request: {e}")
-            if 'req_id' in locals():
-                try:
-                    async with self.db.pool.acquire() as conn:
-                        await conn.execute(
-                            "UPDATE llm_requests SET status = 'failed', error_message = $2 WHERE id = $1",
-                            req_id, str(e)
-                        )
-                except:
-                    pass
+            try:
+                async with self.db.pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE llm_requests SET status = 'failed', error_message = $2 WHERE id = $1",
+                        request_id, str(e)
+                    )
+            except:
+                pass
+
+    async def run_new_analysis(self, reason: str):
+        """Run new analysis with reason."""
+        logger.info(f"🔄 New analysis: {reason}")
+        await self.run_analysis()
+        self.active_prediction = await self.load_active_prediction()
     
     async def run_analysis(self):
         """Run full LLM analysis with enhanced data and self-assessment."""
