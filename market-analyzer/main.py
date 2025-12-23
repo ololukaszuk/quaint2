@@ -20,8 +20,6 @@ from config import Config
 from database import Database
 from analyzer import MarketAnalyzer
 from models import MarketContext
-from llm_controller import LLMController
-
 
 # Configure loguru
 logger.remove()
