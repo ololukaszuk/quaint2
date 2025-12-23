@@ -49,7 +49,6 @@ class MarketAnalyzerService:
         self.config = Config()
         self.db: Optional[Database] = None
         self.analyzer: Optional[MarketAnalyzer] = None
-        self.llm_controller: Optional[LLMController] = None
         self.running = False
         self.last_candle_time: Optional[datetime] = None
         
