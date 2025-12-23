@@ -237,7 +237,7 @@ class LLMAnalystService:
                     SELECT id, trigger_reason, request_time
                     FROM llm_requests
                     WHERE status = 'pending'
-                    ORDER BY request_time DESC  # Latest first!
+                    ORDER BY request_time DESC
                     LIMIT 1
                     """
                 )

@@ -285,14 +285,15 @@ class MarketAnalyzerService:
         elif direction == "SHORT" and ctx.current_price >= sl:
             return f"SL ${sl:,.0f} hit (price: ${ctx.current_price:,.0f})"
         
-        # Check structure break
-        if ctx.smc and ctx.smc.breaks:
-            for brk in ctx.smc.breaks:
-                if brk.get('type') in ['BOS', 'CHoCH']:
-                    brk_dir = brk.get('direction')
+        # Check structure break (FIXED)
+        if ctx.smc and ctx.smc.structure_breaks:
+            for brk in ctx.smc.structure_breaks:
+                # brk is an object with .type and .direction attributes
+                if brk.type in ['BOS', 'CHOCH']:
+                    brk_dir = brk.direction
                     if (direction == "LONG" and brk_dir == "BEARISH") or \
                     (direction == "SHORT" and brk_dir == "BULLISH"):
-                        return f"Structure {brk.get('type')} ({brk_dir})"
+                        return f"Structure {brk.type} ({brk_dir})"
         
         return None
 
