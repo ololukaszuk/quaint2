@@ -59,6 +59,9 @@ class MarketAnalyzerService:
         # Track active signal state
         self.active_signal: Optional[dict] = None
 
+        # Track last LLM request time for debouncing
+        self.last_llm_request_time: Optional[datetime] = None
+
     async def start(self):
         """Initialize and start the service."""
         logger.info("=" * 60)
