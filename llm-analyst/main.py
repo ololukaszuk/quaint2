@@ -32,7 +32,7 @@ from loguru import logger
 from config import Config
 from database import Database
 from ollama_client import OllamaClient, LLMResponse
-from prompt_builder import build_analysis_prompt, build_system_prompt
+from prompt_builder import build_analysis_prompt, build_system_prompt, calculate_atr
 from response_parser import parse_llm_response, ParsedAnalysis
 
 
@@ -509,6 +509,9 @@ class LLMAnalystService:
                 logger.warning("No price data available")
                 return
             
+            # Calculate ATR for volatility-aware validation
+            atr_1h = calculate_atr(candles_1h, period=14) if len(candles_1h) >= 15 else 0
+            
             # Build system prompt with interval context
             system_prompt = build_system_prompt(self.config.analysis_interval_candles)
             
@@ -543,7 +546,7 @@ class LLMAnalystService:
             parsed = parse_llm_response(response.content)
             
             # Validate parsed response
-            parsed = self.validate_and_fix_response(parsed, current_price)
+            parsed = self.validate_and_fix_response(parsed, current_price, atr_1h)
             
             elapsed = time.time() - start_time
             
@@ -567,13 +570,41 @@ class LLMAnalystService:
             import traceback
             traceback.print_exc()
     
-    def validate_and_fix_response(self, parsed: ParsedAnalysis, current_price: float) -> ParsedAnalysis:
+    def validate_and_fix_response(self, parsed: ParsedAnalysis, current_price: float, atr_1h: float = 0) -> ParsedAnalysis:
         """
         Validate and fix common issues with LLM responses:
         - Invalidation level direction (bullish should have lower invalidation)
+        - Invalidation distance relative to ATR (should be at least 1x ATR away)
         - Missing required fields
         - Contradictory outputs
+        
+        Args:
+            parsed: Parsed LLM analysis
+            current_price: Current BTC price
+            atr_1h: Average True Range (14-period on 1H candles) for volatility context
         """
+        # Check invalidation distance relative to ATR
+        if atr_1h > 0 and parsed.invalidation_level and parsed.direction != "NEUTRAL":
+            inv_distance = abs(parsed.invalidation_level - current_price)
+            min_distance = atr_1h  # Minimum 1x ATR
+            recommended_distance = atr_1h * 1.5  # Recommended 1.5x ATR
+            
+            if inv_distance < min_distance:
+                logger.warning(
+                    f"⚠️ Invalidation too close! Distance: ${inv_distance:,.0f} "
+                    f"({inv_distance/current_price*100:.2f}%), "
+                    f"ATR: ${atr_1h:,.0f} ({atr_1h/current_price*100:.2f}%)"
+                )
+                logger.warning(f"   Minimum should be ${min_distance:,.0f} (1.0x ATR), Recommended: ${recommended_distance:,.0f} (1.5x ATR)")
+                
+                # Auto-fix: push invalidation to at least 1.5x ATR
+                if parsed.direction == "BULLISH":
+                    parsed.invalidation_level = current_price - (atr_1h * 1.5)
+                    logger.info(f"   Auto-fixed BULLISH invalidation to ${parsed.invalidation_level:,.0f} (1.5x ATR below price)")
+                elif parsed.direction == "BEARISH":
+                    parsed.invalidation_level = current_price + (atr_1h * 1.5)
+                    logger.info(f"   Auto-fixed BEARISH invalidation to ${parsed.invalidation_level:,.0f} (1.5x ATR above price)")
+        
         # Fix invalidation level logic
         if parsed.invalidation_level and parsed.direction != "NEUTRAL":
             if parsed.direction == "BULLISH":

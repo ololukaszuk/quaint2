@@ -14,26 +14,66 @@ from typing import Dict, List, Any, Optional
 import json
 
 
+
+def calculate_atr(candles: List[Dict[str, Any]], period: int = 14) -> float:
+    """
+    Calculate Average True Range (ATR) for volatility measurement.
+    
+    ATR measures market volatility by averaging true ranges over a period.
+    True Range = max(high - low, abs(high - prev_close), abs(low - prev_close))
+    
+    Args:
+        candles: List of candle dicts with 'high', 'low', 'close'
+        period: Number of periods (default 14)
+        
+    Returns:
+        ATR value as float
+    """
+    if len(candles) < period + 1:
+        return 0.0
+    
+    true_ranges = []
+    
+    for i in range(1, len(candles)):
+        high = float(candles[i]['high'])
+        low = float(candles[i]['low'])
+        prev_close = float(candles[i-1]['close'])
+        
+        # True Range = max of three values
+        tr = max(
+            high - low,                    # Current range
+            abs(high - prev_close),       # High vs previous close
+            abs(low - prev_close)          # Low vs previous close
+        )
+        true_ranges.append(tr)
+    
+    # Take last 'period' true ranges and average
+    recent_trs = true_ranges[-period:]
+    atr = sum(recent_trs) / len(recent_trs)
+    
+    return atr
+
+
 def build_system_prompt(analysis_interval_candles: int = 5) -> str:
     """Build system prompt with context about timing and state-based analysis."""
     return f"""You are a senior cryptocurrency market analyst specializing in BTCUSDT short-term price prediction.
 
-⚡ CRITICAL - UNDERSTAND YOUR ROLE:
+âš¡ CRITICAL - UNDERSTAND YOUR ROLE:
 
 YOUR PREDICTIONS STAY ACTIVE:
 - Once you make a prediction, it remains LIVE until one of these events:
-  1. ❌ Price crosses your INVALIDATION level (prediction proven wrong)
-  2. ✅ Price reaches your 1h or 4h TARGET (prediction fulfilled)
-  3. ⏰ 4+ hours pass with 2%+ price move (prediction becomes stale)
-  4. 📥 Market-analyzer detects significant signal change (>60% confidence)
+  1. âŒ Price crosses your INVALIDATION level (prediction proven wrong)
+  2. âœ… Price reaches your 1h or 4h TARGET (prediction fulfilled)
+  3. â° 4+ hours pass with 2%+ price move (prediction becomes stale)
+  4. ðŸ“¥ Market-analyzer detects significant signal change (>60% confidence)
 
 - You will ONLY be called again when one of these conditions occurs
 - DO NOT make predictions lightly - they remain active until resolved
 - Set your INVALIDATION level thoughtfully - it's the level that proves you WRONG
 
 INVALIDATION RULES (CRITICAL):
-- BULLISH prediction → invalidation must be BELOW current price (e.g., at support)
-- BEARISH prediction → invalidation must be ABOVE current price (e.g., at resistance)
+- BULLISH prediction â†’ invalidation must be BELOW current price (e.g., at support)
+- BEARISH prediction â†’ invalidation must be ABOVE current price (e.g., at resistance)
 - Use critical support/resistance levels for invalidation placement
 - Consider recent market structure when setting invalidation
 
@@ -134,12 +174,12 @@ def format_signal_factors(factors: Optional[List[Dict[str, Any]]]) -> str:
         
         if weight > 0:
             bullish_total += weight
-            symbol = "🟢"
+            symbol = "ðŸŸ¢"
         elif weight < 0:
             bearish_total += abs(weight)
-            symbol = "🔴"
+            symbol = "ðŸ”´"
         else:
-            symbol = "⚪"
+            symbol = "âšª"
         
         lines.append(f"  {symbol} {weight:+.2f} | {desc}")
     
@@ -266,7 +306,7 @@ def format_all_pivot_levels(analysis: Dict[str, Any]) -> str:
                         methods_str = ', '.join(str(m) for m in methods)
                     else:
                         methods_str = str(methods)
-                    symbol = "🔴" if zone_type == "resistance" else "🟢"
+                    symbol = "ðŸ”´" if zone_type == "resistance" else "ðŸŸ¢"
                     lines.append(f"  {symbol} {zone_type.upper()} ${float(price):,.0f} (strength: {float(strength):.0%}, methods: {methods_str})")
     
     return "\n".join(lines) if len(lines) > 3 else "No pivot data available."
@@ -279,12 +319,12 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
     
     smc_bias = analysis.get('smc_bias')
     if smc_bias:
-        bias_emoji = "🟢" if smc_bias == "BULLISH" else "🔴" if smc_bias == "BEARISH" else "🟡"
+        bias_emoji = "ðŸŸ¢" if smc_bias == "BULLISH" else "ðŸ”´" if smc_bias == "BEARISH" else "ðŸŸ¡"
         lines.append(f"SMC Bias: {bias_emoji} {smc_bias}")
     
     price_zone = analysis.get('smc_price_zone') or analysis.get('price_zone')
     if price_zone:
-        zone_emoji = "🟢" if price_zone == "DISCOUNT" else "🔴" if price_zone == "PREMIUM" else "🟡"
+        zone_emoji = "ðŸŸ¢" if price_zone == "DISCOUNT" else "ðŸ”´" if price_zone == "PREMIUM" else "ðŸŸ¡"
         lines.append(f"Price Zone: {zone_emoji} {price_zone}")
     
     equilibrium = analysis.get('smc_equilibrium') or analysis.get('equilibrium_price')
@@ -309,7 +349,7 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
                     low = ob.get('low', 0)
                     high = ob.get('high', 0)
                     strength = ob.get('strength', 0)
-                    symbol = "🟢" if ob_type == "bullish" else "🔴"
+                    symbol = "ðŸŸ¢" if ob_type == "bullish" else "ðŸ”´"
                     lines.append(f"  {symbol} {ob_type.upper()}: ${float(low):,.0f} - ${float(high):,.0f} (strength: {float(strength):.0%})")
     
     # FVGs
@@ -331,7 +371,7 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
                     high = fvg.get('high', 0)
                     unfilled = fvg.get('unfilled', True)
                     if unfilled:
-                        symbol = "🟢" if fvg_type == "bullish" else "🔴"
+                        symbol = "ðŸŸ¢" if fvg_type == "bullish" else "ðŸ”´"
                         lines.append(f"  {symbol} {fvg_type.upper()} FVG: ${float(low):,.0f} - ${float(high):,.0f} (UNFILLED)")
     
     # Structure breaks
@@ -351,7 +391,7 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
                     brk_type = brk.get('type', 'unknown')
                     direction = brk.get('direction', 'unknown')
                     price = brk.get('price', 0)
-                    symbol = "🟢" if direction == "BULLISH" else "🔴"
+                    symbol = "ðŸŸ¢" if direction == "BULLISH" else "ðŸ”´"
                     lines.append(f"  {symbol} {brk_type}: {direction} at ${float(price):,.0f}")
     
     # Liquidity
@@ -370,10 +410,10 @@ def format_smc_data(analysis: Dict[str, Any]) -> str:
             sell_side = liquidity.get('sell_side', [])
             if buy_side:
                 levels = ", ".join([f"${float(l):,.0f}" for l in buy_side[:3]])
-                lines.append(f"  📈 Buy-side (above): {levels}")
+                lines.append(f"  ðŸ“ˆ Buy-side (above): {levels}")
             if sell_side:
                 levels = ", ".join([f"${float(l):,.0f}" for l in sell_side[:3]])
-                lines.append(f"  📉 Sell-side (below): {levels}")
+                lines.append(f"  ðŸ“‰ Sell-side (below): {levels}")
     
     return "\n".join(lines)
 
@@ -415,7 +455,7 @@ def format_support_resistance(analysis: Dict[str, Any]) -> str:
                     strength = level.get('strength', 0)
                     touches = level.get('touches', 0)
                     dist = level.get('distance_pct', 0)
-                    lines.append(f"  🔴 ${float(price):,.0f} | +{float(dist):.2f}% | strength: {float(strength):.0%} | touches: {touches}")
+                    lines.append(f"  ðŸ”´ ${float(price):,.0f} | +{float(dist):.2f}% | strength: {float(strength):.0%} | touches: {touches}")
     
     if support_levels:
         if isinstance(support_levels, str):
@@ -433,7 +473,7 @@ def format_support_resistance(analysis: Dict[str, Any]) -> str:
                     strength = level.get('strength', 0)
                     touches = level.get('touches', 0)
                     dist = level.get('distance_pct', 0)
-                    lines.append(f"  🟢 ${float(price):,.0f} | -{float(dist):.2f}% | strength: {float(strength):.0%} | touches: {touches}")
+                    lines.append(f"  ðŸŸ¢ ${float(price):,.0f} | -{float(dist):.2f}% | strength: {float(strength):.0%} | touches: {touches}")
     
     return "\n".join(lines)
 
@@ -448,11 +488,11 @@ def format_momentum(analysis: Dict[str, Any]) -> str:
     vol_1h = analysis.get('volume_ratio_1h')
     
     if rsi_1h:
-        rsi_status = "OVERSOLD 🟢" if rsi_1h < 30 else "OVERBOUGHT 🔴" if rsi_1h > 70 else "NEUTRAL"
+        rsi_status = "OVERSOLD ðŸŸ¢" if rsi_1h < 30 else "OVERBOUGHT ðŸ”´" if rsi_1h > 70 else "NEUTRAL"
         lines.append(f"RSI 1H: {float(rsi_1h):.1f} ({rsi_status})")
     
     if vol_1h:
-        vol_status = "HIGH 📈" if vol_1h > 1.5 else "LOW 📉" if vol_1h < 0.5 else "NORMAL"
+        vol_status = "HIGH ðŸ“ˆ" if vol_1h > 1.5 else "LOW ðŸ“‰" if vol_1h < 0.5 else "NORMAL"
         lines.append(f"Volume 1H: {float(vol_1h):.2f}x average ({vol_status})")
     
     # Enhanced momentum
@@ -474,8 +514,8 @@ def format_momentum(analysis: Dict[str, Any]) -> str:
                         vol = data.get('volume_ratio', 0)
                         tbr = data.get('taker_buy_ratio', 0)
                         
-                        rsi_emoji = "🟢" if rsi < 40 else "🔴" if rsi > 60 else "🟡"
-                        tbr_emoji = "🟢" if tbr > 0.55 else "🔴" if tbr < 0.45 else "🟡"
+                        rsi_emoji = "ðŸŸ¢" if rsi < 40 else "ðŸ”´" if rsi > 60 else "ðŸŸ¡"
+                        tbr_emoji = "ðŸŸ¢" if tbr > 0.55 else "ðŸ”´" if tbr < 0.45 else "ðŸŸ¡"
                         
                         lines.append(f"  {tf}: RSI {rsi_emoji}{float(rsi):.1f} | Vol {float(vol):.2f}x | Buyers {tbr_emoji}{float(tbr):.0%}")
     
@@ -504,7 +544,7 @@ def format_trends(analysis: Dict[str, Any]) -> str:
                         strength = data.get('strength', 0)
                         ema = data.get('ema', 'N/A')
                         
-                        dir_emoji = "🟢" if direction == "UPTREND" else "🔴" if direction == "DOWNTREND" else "🟡"
+                        dir_emoji = "ðŸŸ¢" if direction == "UPTREND" else "ðŸ”´" if direction == "DOWNTREND" else "ðŸŸ¡"
                         lines.append(f"  {tf:>4}: {dir_emoji} {direction:<12} | Strength: {float(strength):.0%} | EMA: {ema}")
     
     return "\n".join(lines)
@@ -525,14 +565,14 @@ def format_warnings(analysis: Dict[str, Any]) -> str:
     if not warnings or not isinstance(warnings, list):
         return ""
     
-    lines = ["⚠️ WARNINGS:"]
+    lines = ["âš ï¸ WARNINGS:"]
     lines.append("-" * 40)
     for warning in warnings[:5]:
         if isinstance(warning, str):
-            lines.append(f"  • {warning}")
+            lines.append(f"  â€¢ {warning}")
         elif isinstance(warning, dict):
             msg = warning.get('message', str(warning))
-            lines.append(f"  • {msg}")
+            lines.append(f"  â€¢ {msg}")
     
     return "\n".join(lines)
 
@@ -565,8 +605,8 @@ def format_past_predictions(past_analyses: List[Dict[str, Any]]) -> str:
         if actual_1h and predicted_1h:
             pred_dir = "UP" if predicted_1h > price_at_prediction else "DOWN"
             actual_dir = "UP" if actual_1h > price_at_prediction else "DOWN"
-            result = "✅" if correct_1h else "❌"
-            line += f" → Predicted: ${float(predicted_1h):,.0f} ({pred_dir})"
+            result = "âœ…" if correct_1h else "âŒ"
+            line += f" â†’ Predicted: ${float(predicted_1h):,.0f} ({pred_dir})"
             line += f" | Actual: ${float(actual_1h):,.0f} ({actual_dir}) {result}"
             
             total_count += 1
@@ -581,11 +621,11 @@ def format_past_predictions(past_analyses: List[Dict[str, Any]]) -> str:
         lines.append(f"Direction Accuracy (1H): {correct_count}/{total_count} ({accuracy:.0f}%)")
         
         if accuracy < 50:
-            lines.append("⚠️ Accuracy below 50% - Consider being more conservative or reversing bias")
+            lines.append("âš ï¸ Accuracy below 50% - Consider being more conservative or reversing bias")
         elif accuracy < 60:
-            lines.append("📊 Accuracy moderate - Focus on high-confidence setups only")
+            lines.append("ðŸ“Š Accuracy moderate - Focus on high-confidence setups only")
         else:
-            lines.append("✅ Good accuracy - Maintain current approach")
+            lines.append("âœ… Good accuracy - Maintain current approach")
     
     return "\n".join(lines)
 
@@ -603,7 +643,7 @@ def format_market_analysis(analysis: Optional[Dict[str, Any]]) -> str:
     signal_confidence = analysis.get('signal_confidence')
     
     if signal_type:
-        dir_emoji = "🟢" if signal_direction == "LONG" else "🔴" if signal_direction == "SHORT" else "🟡"
+        dir_emoji = "ðŸŸ¢" if signal_direction == "LONG" else "ðŸ”´" if signal_direction == "SHORT" else "ðŸŸ¡"
         lines.append(f"MARKET ANALYZER SIGNAL: {dir_emoji} {signal_type} ({signal_direction})")
         lines.append(f"Confidence: {float(signal_confidence):.0f}%")
         lines.append("")
@@ -662,8 +702,8 @@ def format_signal_history(signals: List[Dict[str, Any]]) -> str:
         direction = sig.get('signal_direction', 'N/A')
         price = float(sig.get('price', 0))
         
-        dir_emoji = "🟢" if direction == "LONG" else "🔴" if direction == "SHORT" else "🟡"
-        lines.append(f"{time_str}: {prev} → {current} ({dir_emoji}{direction}) @ ${price:,.0f}")
+        dir_emoji = "ðŸŸ¢" if direction == "LONG" else "ðŸ”´" if direction == "SHORT" else "ðŸŸ¡"
+        lines.append(f"{time_str}: {prev} â†’ {current} ({dir_emoji}{direction}) @ ${price:,.0f}")
     
     return "\n".join(lines)
 
@@ -692,6 +732,10 @@ def build_analysis_prompt(
     Returns:
         Complete prompt string
     """
+    # Calculate ATR (14-period on 1H candles) for volatility context
+    atr_1h = calculate_atr(candles_1h, period=14)
+    atr_pct = (atr_1h / current_price * 100) if current_price > 0 else 0
+    
     sections = []
     
     # Header with timing context
@@ -701,6 +745,9 @@ def build_analysis_prompt(
     sections.append(f"{'='*70}")
     sections.append(f"Timestamp: {timestamp}")
     sections.append(f"Current Price: ${current_price:,.2f}")
+    sections.append(f"ATR (14-period 1H): ${atr_1h:,.0f} ({atr_pct:.2f}% of price) - Normal hourly volatility")
+    sections.append(f"Minimum invalidation distance: ${atr_1h:,.0f} (1.0x ATR)")
+    sections.append(f"Recommended invalidation distance: ${atr_1h * 1.5:,.0f} - ${atr_1h * 2.0:,.0f} (1.5-2.0x ATR)")
     sections.append(f"Analysis triggers every {analysis_interval_candles} closed 1m candles")
     sections.append(f"You are predicting price at +1 HOUR and +4 HOURS from NOW")
     sections.append("")
@@ -756,13 +803,13 @@ Based on ALL the data above, provide your SHORT-TERM prediction:
 - Consider your past prediction accuracy
 
 **CRITICAL RULES:**
-✅ If BULLISH: invalidation should be BELOW current price
-✅ If BEARISH: invalidation should be ABOVE current price
-✅ Be specific with prices (not ranges)
-✅ Base 1h/4h targets on S/R levels and pivot points
-❌ Don't skip sections
-❌ Don't hedge excessively
-❌ Don't contradict yourself
+âœ… If BULLISH: invalidation should be BELOW current price
+âœ… If BEARISH: invalidation should be ABOVE current price
+âœ… Be specific with prices (not ranges)
+âœ… Base 1h/4h targets on S/R levels and pivot points
+âŒ Don't skip sections
+âŒ Don't hedge excessively
+âŒ Don't contradict yourself
 """)
     
     return "\n".join(sections)
