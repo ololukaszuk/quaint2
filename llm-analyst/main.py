@@ -712,7 +712,7 @@ class LLMAnalystService:
         # Key levels
         logger.info("🎯 KEY LEVELS")
         logger.info("-" * 60)
-        logger.info("🎯 KEY LEVELS")
+        if parsed.critical_support:
             dist = (current_price - parsed.critical_support) / current_price * 100
             logger.info(f"  Critical Support:    ${parsed.critical_support:,.0f} ({dist:+.2f}% from price)")
         if parsed.critical_resistance:
@@ -724,7 +724,7 @@ class LLMAnalystService:
         # Reasoning
         logger.info("💭 REASONING")
         logger.info("-" * 60)
-        logger.info("💭 REASONING")
+        if parsed.reasoning:
             # Word wrap reasoning
             words = parsed.reasoning.split()
             lines = []
