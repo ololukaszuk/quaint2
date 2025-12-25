@@ -65,7 +65,7 @@ class LLMAnalystService:
     async def start(self):
         """Initialize and start the service."""
         logger.info("=" * 70)
-        logger.info("🤖 LLM MARKET ANALYST SERVICE v2.0 STARTING")
+        logger.info("ðŸ¤– LLM MARKET ANALYST SERVICE v2.0 STARTING")
         logger.info("=" * 70)
         logger.info(f"Model: {self.config.ollama_model}")
         logger.info(f"Ollama URL: {self.config.ollama_base_url}")
@@ -143,7 +143,7 @@ class LLMAnalystService:
             # Priority 1: Check for market-analyzer request
             request = await self.check_pending_request()
             if request:
-                logger.info(f"📥 Market request: {request['trigger_reason']}")
+                logger.info(f"ðŸ“¥ Market request: {request['trigger_reason']}")
                 await self.process_request(request['id'])
                 return
             
@@ -162,20 +162,20 @@ class LLMAnalystService:
             
             # Check invalidation
             if (invalidation := self.check_invalidation(current_price)):
-                logger.info(f"🚨 INVALIDATED: {invalidation}")
+                logger.info(f"ðŸš¨ INVALIDATED: {invalidation}")
                 await self.run_new_analysis(f"invalidated:{invalidation}")
                 return
             
             # Check fulfillment
             fulfillment = await self.check_fulfillment(current_price)
             if fulfillment:
-                logger.info(f"✅ TARGET HIT: {fulfillment}")
+                logger.info(f"âœ… TARGET HIT: {fulfillment}")
                 await self.run_new_analysis(f"fulfilled:{fulfillment}")
                 return
             
             # Check staleness
             if (staleness := self.check_staleness(current_price)):
-                logger.info(f"⏰ STALE: {staleness}")
+                logger.info(f"â° STALE: {staleness}")
                 await self.run_new_analysis(f"stale:{staleness}")
                 return
                 
@@ -249,18 +249,20 @@ class LLMAnalystService:
                 latest_id = row['id']
                 
                 # Mark ALL other pending requests as superseded
-                superseded_count = await conn.fetchval(
+                result = await conn.execute(
                     """
                     UPDATE llm_requests 
                     SET status = 'superseded', processed_at = NOW()
                     WHERE status = 'pending' AND id != $1
-                    RETURNING COUNT(*)
                     """,
                     latest_id
                 )
                 
-                if superseded_count and superseded_count > 0:
-                    logger.info(f"🗑️  Marked {superseded_count} old requests as superseded")
+                # Parse "UPDATE 5" -> 5
+                superseded_count = int(result.split()[-1]) if result else 0
+                
+                if superseded_count > 0:
+                    logger.info(f"ðŸ—‘ï¸  Marked {superseded_count} old requests as superseded")
                 
                 return dict(row)
         except Exception as e:
@@ -444,7 +446,7 @@ class LLMAnalystService:
                 )
             
             self.active_prediction = await self.load_active_prediction()
-            logger.info(f"✅ Request #{request_id} completed")
+            logger.info(f"âœ… Request #{request_id} completed")
             
         except Exception as e:
             logger.error(f"Error processing request: {e}")
@@ -459,7 +461,7 @@ class LLMAnalystService:
 
     async def run_new_analysis(self, reason: str):
         """Run new analysis with reason."""
-        logger.info(f"🔄 New analysis: {reason}")
+        logger.info(f"ðŸ”„ New analysis: {reason}")
         await self.run_analysis()
         self.active_prediction = await self.load_active_prediction()
     
@@ -526,7 +528,7 @@ class LLMAnalystService:
             logger.debug(f"Prompt built: {len(prompt)} chars")
             
             # Query LLM
-            logger.info(f"🧠 Querying {self.config.ollama_model}...")
+            logger.info(f"ðŸ§  Querying {self.config.ollama_model}...")
             
             response = await self.ollama.generate(
                 prompt=prompt,
@@ -579,7 +581,7 @@ class LLMAnalystService:
             if parsed.direction == "BULLISH":
                 # Bullish prediction should have invalidation BELOW current price
                 if parsed.invalidation_level > current_price:
-                    logger.warning(f"⚠️ Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
+                    logger.warning(f"âš ï¸ Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
                     # Use critical support or calculate from price
                     if parsed.critical_support and parsed.critical_support < current_price:
                         parsed.invalidation_level = parsed.critical_support * 0.998
@@ -591,7 +593,7 @@ class LLMAnalystService:
                 # Bearish prediction should have invalidation ABOVE current price
                 if parsed.invalidation_level < current_price:
                     if self.config.detailed_logging:
-                        logger.warning(f"⚠️ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
+                        logger.warning(f"âš ï¸ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
                     if parsed.critical_resistance and parsed.critical_resistance > current_price:
                         parsed.invalidation_level = parsed.critical_resistance * 1.002
                     else:
@@ -601,9 +603,9 @@ class LLMAnalystService:
         # Ensure price targets make sense
         if parsed.price_1h:
             if parsed.direction == "BULLISH" and parsed.price_1h < current_price:
-                logger.warning(f"⚠️ BULLISH but 1h target ${parsed.price_1h:,.0f} < current ${current_price:,.0f}")
+                logger.warning(f"âš ï¸ BULLISH but 1h target ${parsed.price_1h:,.0f} < current ${current_price:,.0f}")
             elif parsed.direction == "BEARISH" and parsed.price_1h > current_price:
-                logger.warning(f"⚠️ BEARISH but 1h target ${parsed.price_1h:,.0f} > current ${current_price:,.0f}")
+                logger.warning(f"âš ï¸ BEARISH but 1h target ${parsed.price_1h:,.0f} > current ${current_price:,.0f}")
         
         # Fill in missing critical levels with defaults
         if not parsed.critical_support:
@@ -625,7 +627,7 @@ class LLMAnalystService:
         """Log the analysis with rich formatting."""
         logger.info("")
         logger.info("=" * 80)
-        logger.info(f"🤖 LLM ANALYSIS COMPLETE - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
+        logger.info(f"ðŸ¤– LLM ANALYSIS COMPLETE - {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC")
         logger.info("=" * 80)
         logger.info(f"Model: {response.model} | Time: {elapsed:.1f}s | Tokens: {response.eval_count} | Speed: {response.tokens_per_second:.1f} t/s")
         logger.info("Analysis triggered by market-analyzer via llm_requests table")
@@ -637,8 +639,8 @@ class LLMAnalystService:
             total_count = len(past_predictions)
             if total_count > 0:
                 accuracy = correct_count / total_count * 100
-                acc_emoji = "✅" if accuracy >= 60 else "⚠️" if accuracy >= 50 else "❌"
-                logger.info(f"📊 PAST ACCURACY (1H direction): {acc_emoji} {correct_count}/{total_count} ({accuracy:.0f}%)")
+                acc_emoji = "âœ…" if accuracy >= 60 else "âš ï¸" if accuracy >= 50 else "âŒ"
+                logger.info(f"ðŸ“Š PAST ACCURACY (1H direction): {acc_emoji} {correct_count}/{total_count} ({accuracy:.0f}%)")
                 logger.info("")
         
         # Market context from analyzer
@@ -647,70 +649,70 @@ class LLMAnalystService:
             signal_dir = market_analysis.get('signal_direction', 'N/A')
             smc_bias = market_analysis.get('smc_bias', 'N/A')
             
-            dir_emoji = "🟢" if signal_dir == "LONG" else "🔴" if signal_dir == "SHORT" else "🟡"
-            logger.info(f"📈 MARKET ANALYZER SIGNAL: {dir_emoji} {signal_type} ({signal_dir})")
+            dir_emoji = "ðŸŸ¢" if signal_dir == "LONG" else "ðŸ”´" if signal_dir == "SHORT" else "ðŸŸ¡"
+            logger.info(f"ðŸ“ˆ MARKET ANALYZER SIGNAL: {dir_emoji} {signal_type} ({signal_dir})")
             logger.info(f"   SMC Bias: {smc_bias}")
             
             warnings = market_analysis.get('warnings')
             if warnings:
                 if isinstance(warnings, list) and len(warnings) > 0:
-                    logger.info(f"   ⚠️ Warnings: {len(warnings)} active")
+                    logger.info(f"   âš ï¸ Warnings: {len(warnings)} active")
                     for msg in warnings[:3]:
                         if isinstance(msg, str):
-                            logger.info(f"      • {msg[:60]}")
+                            logger.info(f"      â€¢ {msg[:60]}")
             
             logger.info("")
         
         # Direction banner
         if parsed.direction == "BULLISH":
-            logger.info("🟢" * 20)
-            logger.info(f"🚀 LLM PREDICTION: BULLISH")
+            logger.info("ðŸŸ¢" * 20)
+            logger.info(f"ðŸš€ LLM PREDICTION: BULLISH")
             logger.info(f"   Confidence: {parsed.confidence}")
-            logger.info("🟢" * 20)
+            logger.info("ðŸŸ¢" * 20)
         elif parsed.direction == "BEARISH":
-            logger.info("🔴" * 20)
-            logger.info(f"📉 LLM PREDICTION: BEARISH")
+            logger.info("ðŸ”´" * 20)
+            logger.info(f"ðŸ“‰ LLM PREDICTION: BEARISH")
             logger.info(f"   Confidence: {parsed.confidence}")
-            logger.info("🔴" * 20)
+            logger.info("ðŸ”´" * 20)
         else:
-            logger.info("🟡" * 20)
-            logger.info(f"⏸️  LLM PREDICTION: NEUTRAL")
+            logger.info("ðŸŸ¡" * 20)
+            logger.info(f"â¸ï¸  LLM PREDICTION: NEUTRAL")
             logger.info(f"   Confidence: {parsed.confidence}")
-            logger.info("🟡" * 20)
+            logger.info("ðŸŸ¡" * 20)
         
         logger.info("")
         
         # Price targets
-        logger.info("📊 PRICE TARGETS")
+        logger.info("ðŸ“Š PRICE TARGETS")
         logger.info("-" * 60)
         logger.info(f"  Current Price:  ${current_price:,.2f}")
         
         if parsed.price_1h:
             diff_1h = parsed.price_1h - current_price
             diff_pct_1h = diff_1h / current_price * 100
-            dir_emoji = "📈" if diff_pct_1h > 0 else "📉"
+            dir_emoji = "ðŸ“ˆ" if diff_pct_1h > 0 else "ðŸ“‰"
             logger.info(f"  Expected (1H):  ${parsed.price_1h:,.0f} ({diff_pct_1h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (1H):  Not specified ⚠️")
+            logger.info(f"  Expected (1H):  Not specified âš ï¸")
         
         if parsed.price_4h:
             diff_4h = parsed.price_4h - current_price
             diff_pct_4h = diff_4h / current_price * 100
-            dir_emoji = "📈" if diff_pct_4h > 0 else "📉"
+            dir_emoji = "ðŸ“ˆ" if diff_pct_4h > 0 else "ðŸ“‰"
             logger.info(f"  Expected (4H):  ${parsed.price_4h:,.0f} ({diff_pct_4h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (4H):  Not specified ⚠️")
+            logger.info(f"  Expected (4H):  Not specified âš ï¸")
         
         if parsed.invalidation_level:
             inv_pct = (parsed.invalidation_level - current_price) / current_price * 100
             logger.info(f"  Invalidation:   ${parsed.invalidation_level:,.0f} ({inv_pct:+.2f}%)")
         else:
-            logger.info(f"  Invalidation:   Not specified ⚠️")
+            logger.info(f"  Invalidation:   Not specified âš ï¸")
         
         logger.info("")
         
         # Key levels
-        logger.info("🎯 KEY LEVELS")
+        logger.info("ðŸŽ¯ KEY LEVELS")
         logger.info("-" * 60)
         if parsed.critical_support:
             dist = (current_price - parsed.critical_support) / current_price * 100
@@ -722,7 +724,7 @@ class LLMAnalystService:
         logger.info("")
         
         # Reasoning
-        logger.info("💭 REASONING")
+        logger.info("ðŸ’­ REASONING")
         logger.info("-" * 60)
         if parsed.reasoning:
             # Word wrap reasoning
@@ -741,7 +743,7 @@ class LLMAnalystService:
             for line in lines:
                 logger.info(line)
         else:
-            logger.info("  No specific reasoning extracted ⚠️")
+            logger.info("  No specific reasoning extracted âš ï¸")
         
         logger.info("")
         logger.info("=" * 80)
@@ -759,21 +761,21 @@ class LLMAnalystService:
         
         # Direction emoji
         if parsed.direction == "BULLISH":
-            emoji = "🟢"
+            emoji = "ðŸŸ¢"
         elif parsed.direction == "BEARISH":
-            emoji = "🔴"
+            emoji = "ðŸ”´"
         else:
-            emoji = "⚪"
+            emoji = "âšª"
         
         # Show 1h target and change
         if parsed.price_1h:
             change_pct = (parsed.price_1h - current_price) / current_price * 100
-            target_str = f"→ ${parsed.price_1h:,.0f} ({change_pct:+.2f}%)"
+            target_str = f"â†’ ${parsed.price_1h:,.0f} ({change_pct:+.2f}%)"
         else:
-            target_str = "→ N/A"
+            target_str = "â†’ N/A"
         
         logger.info(
-            f"{timestamp} | 🤖 {emoji} {parsed.direction} {parsed.confidence} | "
+            f"{timestamp} | ðŸ¤– {emoji} {parsed.direction} {parsed.confidence} | "
             f"${current_price:,.0f} {target_str} | {elapsed:.1f}s"
         )
 
@@ -866,7 +868,7 @@ class LLMAnalystService:
             warnings_at_analysis=warnings_at_analysis,
         )
         
-        logger.debug("✅ LLM analysis saved to database")
+        logger.debug("âœ… LLM analysis saved to database")
     
     async def stop(self):
         """Graceful shutdown."""
