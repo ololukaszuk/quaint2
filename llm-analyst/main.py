@@ -461,7 +461,6 @@ class LLMAnalystService:
         """Run new analysis with reason."""
         logger.info(f"📄 New analysis: {reason}")
         await self.run_analysis()
-        logger.info(f"📄 New analysis: {reason}")
     
     async def run_analysis(self):
         """Run full LLM analysis with enhanced data and self-assessment."""
@@ -565,6 +564,9 @@ class LLMAnalystService:
                 market_analysis=market_analysis,
             )
             
+            # Update active prediction with the corrected values
+            self.active_prediction = await self.load_active_prediction()
+            
         except Exception as e:
             logger.error(f"Analysis error: {e}")
             import traceback
@@ -629,12 +631,21 @@ class LLMAnalystService:
                         parsed.invalidation_level = current_price * 1.01
                     logger.info(f"   Fixed to ${parsed.invalidation_level:,.0f}")
         
-        # Ensure price targets make sense
-        if parsed.price_1h:
+        # Ensure price targets make sense - if contradictory, force to NEUTRAL
+        if parsed.price_1h and parsed.direction != "NEUTRAL":
             if parsed.direction == "BULLISH" and parsed.price_1h < current_price:
-                logger.warning(f"⚠️ BULLISH but 1h target ${parsed.price_1h:,.0f} < current ${current_price:,.0f}")
+                logger.warning(f"⚠️ CONTRADICTION: BULLISH but 1h target ${parsed.price_1h:,.0f} < current ${current_price:,.0f}")
+                logger.warning(f"   Auto-fixing to NEUTRAL due to contradictory prediction")
+                parsed.direction = "NEUTRAL"
+                # For NEUTRAL, set wide invalidation ranges
+                if atr_1h > 0:
+                    # NEUTRAL gets invalidation at 2.5x ATR in both directions
+                    parsed.invalidation_level = None  # No single invalidation for NEUTRAL
             elif parsed.direction == "BEARISH" and parsed.price_1h > current_price:
-                logger.warning(f"⚠️ BEARISH but 1h target ${parsed.price_1h:,.0f} > current ${current_price:,.0f}")
+                logger.warning(f"⚠️ CONTRADICTION: BEARISH but 1h target ${parsed.price_1h:,.0f} > current ${current_price:,.0f}")
+                logger.warning(f"   Auto-fixing to NEUTRAL due to contradictory prediction")
+                parsed.direction = "NEUTRAL"
+                parsed.invalidation_level = None
         
         # Fill in missing critical levels with defaults
         if not parsed.critical_support:
