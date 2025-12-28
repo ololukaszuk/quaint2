@@ -9,23 +9,26 @@ Flow: ml-predictions (DB) → data-ws → WebSocket clients
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        State, WebSocketUpgrade},
+        State, WebSocketUpgrade,
+    },
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::get,
     Router,
 };
-use axum_server::tls_rustls::RustlsConfig;
 use deadpool_postgres::{Config, Pool, Runtime};
 use futures_util::{SinkExt, StreamExt};
-use rcgen::{Certificate, CertificateParams, DistinguishedName};
+use rcgen::{CertificateParams, DistinguishedName, KeyPair};
 use rustls::ServerConfig;
+use rustls_pemfile::{certs, pkcs8_private_keys};
 use serde::{Deserialize, Serialize};
+use std::io::BufReader;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
+use tokio_rustls::TlsAcceptor;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -49,7 +52,7 @@ struct Prediction {
     model_version: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct APIResponse<T> {
     success: bool,
     data: Option<T>,
@@ -57,101 +60,145 @@ struct APIResponse<T> {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Logging
+async fn main() {
+    // Catch panics BEFORE logger init
+    std::panic::set_hook(Box::new(|panic_info| {
+        eprintln!("PANIC: {:?}", panic_info);
+    }));
+
+    // Setup logging
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
 
-    info!("=" .repeat(80));
+    info!("=============================================================================");
     info!("Data WebSocket Service - Starting");
-    info!("=" .repeat(80));
+    info!("=============================================================================");
 
-    // Load config
+    // Run
+    if let Err(e) = run().await {
+        error!("Fatal error: {:?}", e);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> anyhow::Result<()> {
+    eprintln!("1. Starting run()");
     dotenvy::dotenv().ok();
 
+    eprintln!("2. Reading env vars");
+    let db_host = std::env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string());
+    let db_port = std::env::var("DB_PORT").unwrap_or_else(|_| "5432".to_string());
+    let db_name = std::env::var("DB_NAME").unwrap_or_else(|_| "btc_ml_production".to_string());
+    let db_user = std::env::var("DB_USER").unwrap_or_else(|_| "mltrader".to_string());
+    let db_password = std::env::var("DB_PASSWORD").unwrap_or_else(|_| "password".to_string());
+    let api_key = std::env::var("API_KEY").unwrap_or_else(|_| "your_api_key_here".to_string());
     let bind_addr = std::env::var("DATA_WS_BIND_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:8443".to_string());
-    let api_key = std::env::var("API_KEY")
-        .unwrap_or_else(|_| "your_secure_api_key_here".to_string());
+        .unwrap_or_else(|_| "0.0.0.0:8443".to_string())
+        .parse::<SocketAddr>()?;
 
     // Database pool
+    eprintln!("3. Creating DB pool");
     let mut cfg = Config::new();
-    cfg.host = Some(std::env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string()));
-    cfg.port = Some(
-        std::env::var("DB_PORT")
-            .unwrap_or_else(|_| "5432".to_string())
-            .parse()
-            .unwrap_or(5432),
-    );
-    cfg.dbname = Some(std::env::var("DB_NAME").unwrap_or_else(|_| "btc_ml_production".to_string()));
-    cfg.user = Some(std::env::var("DB_USER").unwrap_or_else(|_| "mltrader".to_string()));
-    cfg.password = Some(std::env::var("DB_PASSWORD").unwrap_or_else(|_| "password".to_string()));
+    cfg.host = Some(db_host.clone());
+    cfg.port = Some(db_port.parse()?);
+    cfg.dbname = Some(db_name.clone());
+    cfg.user = Some(db_user.clone());
+    cfg.password = Some(db_password);
 
     let pool = cfg.create_pool(Some(Runtime::Tokio1), tokio_postgres::NoTls)?;
 
-    info!("✓ Database pool created");
-    info!("✓ API key authentication enabled");
+    info!("✓ Database pool created: {}:{}/{}", db_host, db_port, db_name);
 
-    // Generate self-signed cert
-    info!("Generating self-signed TLS certificate...");
-    let cert = generate_self_signed_cert()?;
-    let tls_config = create_tls_config(&cert)?;
+    let state = AppState {
+        pool: pool.clone(),
+        api_key: api_key.clone(),
+    };
 
-    info!("✓ Self-signed certificate generated");
+    // Test DB connection
+    eprintln!("4. Testing DB connection");
+    match pool.get().await {
+        Ok(_) => info!("✓ Database connection test successful"),
+        Err(e) => {
+            error!("✗ Database connection failed: {}", e);
+            return Err(e.into());
+        }
+    }
 
-    // App state
-    let state = AppState { pool, api_key };
-
-    // Build router
+    // Build app
+    eprintln!("5. Building app");
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/api/v1/predictions/latest", get(latest_prediction_handler))
         .route("/api/v1/predictions/stream", get(websocket_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
-            api_key_middleware,
+            auth_middleware,
         ))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    // Start server
-    let addr: SocketAddr = bind_addr.parse()?;
-    info!("Starting HTTPS server on {}", addr);
-    info!("Endpoints:");
-    info!("  GET  /health                       - Health check");
-    info!("  GET  /api/v1/predictions/latest    - Latest prediction");
-    info!("  WS   /api/v1/predictions/stream    - WebSocket stream");
-    info!("Authentication: Bearer <api-key>");
-    info!("=" .repeat(80));
+    // Generate self-signed cert
+    eprintln!("6. Generating cert");
+    info!("Generating self-signed TLS certificate...");
+    let cert = generate_self_signed_cert()?;
+    let cert_pem = cert.cert.pem();
+    let key_pem = cert.key_pair.serialize_pem();
+    eprintln!("7. Cert generated");
 
-    axum_server::bind_rustls(addr, tls_config)
+    // Create TLS config
+    let certs = certs(&mut BufReader::new(cert_pem.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+    
+    let keys = pkcs8_private_keys(&mut BufReader::new(key_pem.as_bytes()))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut server_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, rustls::pki_types::PrivateKeyDer::Pkcs8(keys[0].clone()))?;
+
+    server_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+    let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
+
+    info!("✓ TLS configured (self-signed certificate)");
+    info!("=============================================================================");
+    info!("🚀 HTTPS server listening on: https://{}", bind_addr);
+    info!("=============================================================================");
+
+    // Generate cert files
+    std::fs::write("/tmp/cert.pem", cert_pem)?;
+    std::fs::write("/tmp/key.pem", key_pem)?;
+
+    // Use axum-server with rustls
+    let rustls_config = axum_server::tls_rustls::RustlsConfig::from_pem_file(
+        "/tmp/cert.pem",
+        "/tmp/key.pem"
+    ).await?;
+
+    axum_server::bind_rustls(bind_addr, rustls_config)
         .serve(app.into_make_service())
         .await?;
 
     Ok(())
 }
 
-// API Key middleware
-async fn api_key_middleware<B>(
+async fn auth_middleware<B>(
     State(state): State<AppState>,
     req: Request<B>,
     next: Next<B>,
 ) -> Response {
-    // Skip auth for health endpoint
+    // Health endpoint doesn't need auth
     if req.uri().path() == "/health" {
         return next.run(req).await;
     }
 
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok());
-
-    if let Some(auth) = auth_header {
-        if let Some(token) = auth.strip_prefix("Bearer ") {
+    // Check Authorization header
+    if let Some(auth_header) = req.headers().get("Authorization") {
+        if let Ok(auth_str) = auth_header.to_str() {
+            let token = auth_str.strip_prefix("Bearer ").unwrap_or(auth_str);
             if token == state.api_key {
                 return next.run(req).await;
             }
@@ -243,53 +290,46 @@ async fn websocket_handler(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(|socket| websocket_connection(socket, state))
+    ws.on_upgrade(|socket| websocket_stream(socket, state))
 }
 
-async fn websocket_connection(socket: WebSocket, state: AppState) {
+async fn websocket_stream(socket: WebSocket, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
 
-    info!("WebSocket client connected");
+    let mut tick = interval(Duration::from_secs(5));
 
-    // Spawn send task
-    let send_state = state.clone();
-    let send_task = tokio::spawn(async move {
-        let mut tick = interval(Duration::from_secs(5));
-
-        loop {
-            tick.tick().await;
-
-            // Fetch latest prediction
-            match fetch_latest_prediction(&send_state.pool).await {
-                Ok(Some(pred)) => {
-                    let json = serde_json::to_string(&pred).unwrap();
-                    if sender.send(Message::Text(json)).await.is_err() {
-                        break;
+    loop {
+        tokio::select! {
+            _ = tick.tick() => {
+                match fetch_latest_prediction(&state.pool).await {
+                    Ok(Some(pred)) => {
+                        let json = serde_json::to_string(&pred).unwrap();
+                        if sender.send(Message::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(None) => {
+                        // No data yet
+                    }
+                    Err(e) => {
+                        error!("Error fetching prediction: {}", e);
                     }
                 }
-                Ok(None) => {}
-                Err(e) => {
-                    error!("Error fetching prediction: {}", e);
+            }
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(Message::Close(_))) | None => {
+                        info!("WebSocket client disconnected");
+                        break;
+                    }
+                    Some(Ok(Message::Ping(_))) => {
+                        // Auto-handled by axum
+                    }
+                    _ => {}
                 }
             }
         }
-    });
-
-    // Receive task
-    let recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
-            if let Message::Close(_) = msg {
-                break;
-            }
-        }
-    });
-
-    tokio::select! {
-        _ = send_task => {},
-        _ = recv_task => {},
     }
-
-    info!("WebSocket client disconnected");
 }
 
 async fn fetch_latest_prediction(pool: &Pool) -> anyhow::Result<Option<Prediction>> {
@@ -331,23 +371,16 @@ async fn fetch_latest_prediction(pool: &Pool) -> anyhow::Result<Option<Predictio
     }))
 }
 
-fn generate_self_signed_cert() -> anyhow::Result<Certificate> {
-    let mut params = CertificateParams::new(vec!["localhost".to_string()]);
+fn generate_self_signed_cert() -> anyhow::Result<rcgen::CertifiedKey> {
+    let mut params = CertificateParams::new(vec!["localhost".to_string()])?;
     params.distinguished_name = DistinguishedName::new();
     params.distinguished_name.push(
         rcgen::DnType::CommonName,
         "BTC ML Data WebSocket Service",
     );
 
-    Ok(Certificate::from_params(params)?)
-}
+    let key_pair = KeyPair::generate()?;
+    let cert = params.self_signed(&key_pair)?;
 
-fn create_tls_config(cert: &Certificate) -> anyhow::Result<RustlsConfig> {
-    let cert_pem = cert.serialize_pem()?;
-    let key_pem = cert.serialize_private_key_pem();
-
-    Ok(RustlsConfig::from_pem(
-        cert_pem.as_bytes().to_vec(),
-        key_pem.as_bytes().to_vec(),
-    )?)
+    Ok(rcgen::CertifiedKey { cert, key_pair })
 }

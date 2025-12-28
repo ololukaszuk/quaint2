@@ -5,15 +5,16 @@ RUN apt-get update && apt-get install -y \
     curl build-essential pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+# Install Rust 1.85
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /build
-COPY Cargo.toml ./
+COPY inference/Cargo.toml ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs && \
     cargo build --release && rm -rf src
 
-COPY src ./src
+COPY inference/src ./src
 RUN cargo build --release
 
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04

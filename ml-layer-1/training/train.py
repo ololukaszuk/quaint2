@@ -1,6 +1,7 @@
 """
 ML Layer 1 - Training Pipeline
 Exports 3 separate ONNX models (1min, 5min, 15min)
+Uses LOG RETURNS for better training stability
 """
 
 import os
@@ -9,6 +10,14 @@ import psycopg2
 from datetime import datetime, timedelta
 import json
 from pathlib import Path
+
+import warnings
+import logging
+
+# Suppress TF warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+warnings.filterwarnings('ignore')
 
 import tensorflow as tf
 from tensorflow import keras
@@ -26,7 +35,7 @@ tf.keras.mixed_precision.set_global_policy(policy)
 tf.config.experimental.enable_tensor_float_32_execution(True)
 
 class FeatureComputer:
-    """Compute 9 technical features"""
+    """Compute 9 technical features matching Rust implementation"""
     
     @staticmethod
     def calculate_rsi(prices, period=14):
@@ -70,7 +79,7 @@ class FeatureComputer:
     
     @staticmethod
     def compute_features(closes, highs, lows, volumes):
-        """9 features matching Rust"""
+        """9 features matching Rust exactly"""
         n = len(closes)
         features = np.zeros((n, 9))
         
@@ -126,9 +135,8 @@ def fetch_data(db_config, months=12):
     
     cur.execute("""
         SELECT EXTRACT(EPOCH FROM time)::bigint, close, high, low, volume
-        FROM klines
-        WHERE symbol = 'BTCUSDT' AND interval = '1m'
-          AND time >= %s AND time <= %s
+        FROM candles_1m
+        WHERE time >= %s AND time <= %s
         ORDER BY time ASC
     """, (start, end))
     
@@ -154,22 +162,25 @@ def create_sequences(features, targets, seq_len=60):
         y.append(targets[i])
     return np.array(X), np.array(y)
 
-def build_model(seq_len=60, n_features=9):
-    """Optimized for RTX 5090"""
+def build_model():
     model = keras.Sequential([
-        layers.Input(shape=(seq_len, n_features)),
-        layers.LSTM(128, return_sequences=True),
-        layers.Dropout(0.2),
-        layers.LSTM(64),
-        layers.Dropout(0.2),
+        layers.Masking(mask_value=0., input_shape=(60, 9)),
+        layers.LSTM(128, return_sequences=True, time_major=False,
+                    recurrent_activation='sigmoid'),
+        layers.Dropout(0.3),
+        layers.LSTM(64, time_major=False,
+                    recurrent_activation='sigmoid'),
+        layers.Dropout(0.3),
         layers.Dense(32, activation='relu'),
-        layers.Dense(1, activation='linear', dtype='float32')
+        layers.Dense(1, activation='linear', dtype='float32'),  # Linear for regression
     ])
+    
     model.compile(
-        optimizer=keras.optimizers.Adam(0.001),
-        loss='mse',
+        optimizer=keras.optimizers.Adam(learning_rate=0.0005),
+        loss='mse',  # MSE better for log returns
         metrics=['mae']
     )
+    
     return model
 
 def register_model_in_db(db_config, version, horizon, model_path, norm_params, metrics, samples, duration):
@@ -177,7 +188,6 @@ def register_model_in_db(db_config, version, horizon, model_path, norm_params, m
     conn = psycopg2.connect(**db_config)
     cur = conn.cursor()
     
-    # Insert new model (don't deactivate others - we have 3 models now)
     cur.execute("""
         INSERT INTO ml_models 
         (version, model_path, normalization_params, training_metrics, 
@@ -195,7 +205,7 @@ def register_model_in_db(db_config, version, horizon, model_path, norm_params, m
         model_path,
         json.dumps(norm_params),
         json.dumps(metrics),
-        True,  # All models active
+        True,
         samples,
         duration,
         metrics.get('test_rmse'),
@@ -209,7 +219,7 @@ def register_model_in_db(db_config, version, horizon, model_path, norm_params, m
 def main():
     print("=" * 80)
     print("ML Layer 1 - Multi-Horizon Training (3 Models)")
-    print("GPU: RTX 5090 | CUDA 12.8 | TensorFlow 2.18")
+    print("Using LOG RETURNS for stable training")
     print("=" * 80)
     
     DB_CONFIG = {
@@ -225,52 +235,52 @@ def main():
     
     start_time = datetime.now()
     
-    # Fetch
+    # Fetch data
     print("\nFetching data from DB...")
     timestamps, closes, highs, lows, volumes = fetch_data(DB_CONFIG, 12)
     print(f"✓ Fetched {len(closes):,} candles")
     
-    # Features
+    # Compute features
     print("\nComputing features...")
     features = FeatureComputer.compute_features(closes, highs, lows, volumes)
     
-    # Train for 3 horizons - EXPORT ALL 3
+    # Train 3 horizons
     horizons = [1, 5, 15]
     version = f"v{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    # Use SAME scaler for all models
+    # Single scaler for all models
     scaler = StandardScaler()
     
-    for horizon in horizons:
+    for idx, horizon in enumerate(horizons):
         print(f"\n{'='*80}")
         print(f"Training {horizon}-minute model")
         print('='*80)
         
-        # Targets (shift by horizon)
-        targets = np.roll(closes, -horizon)
-        targets[-horizon:] = np.nan
-        valid = ~np.isnan(targets)
-        features_h = features[valid]
-        targets_h = targets[valid]
+        # Create LOG RETURNS targets
+        # log(price_future / price_current)
+        targets = np.log(closes[horizon:] / closes[:-horizon])
         
-        # Normalize (fit scaler only on first horizon, reuse for others)
-        if horizon == 1:
+        # Trim features to match targets
+        features_h = features[:-horizon]
+        
+        # Normalize features (fit only on first horizon)
+        if idx == 0:
             features_norm = np.clip(scaler.fit_transform(features_h), -10, 10)
         else:
             features_norm = np.clip(scaler.transform(features_h), -10, 10)
         
-        # Split
+        # Split: 60% train, 20% val, 20% test
         n = len(features_norm)
         train_end = int(n * 0.6)
         val_end = int(n * 0.8)
         
-        X_train, y_train = create_sequences(features_norm[:train_end], targets_h[:train_end])
-        X_val, y_val = create_sequences(features_norm[train_end:val_end], targets_h[train_end:val_end])
-        X_test, y_test = create_sequences(features_norm[val_end:], targets_h[val_end:])
+        X_train, y_train = create_sequences(features_norm[:train_end], targets[:train_end])
+        X_val, y_val = create_sequences(features_norm[train_end:val_end], targets[train_end:val_end])
+        X_test, y_test = create_sequences(features_norm[val_end:], targets[val_end:])
         
         print(f"Train: {len(X_train)}, Val: {len(X_val)}, Test: {len(X_test)}")
         
-        # Train
+        # Build and train model
         model = build_model()
         print(f"\nTraining {horizon}min model...")
         
@@ -288,17 +298,27 @@ def main():
         
         # Evaluate
         y_pred = model.predict(X_test, batch_size=256, verbose=0).flatten()
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        mape = mean_absolute_percentage_error(y_test, y_pred) * 100
         
-        direction_correct = ((y_pred > y_test[:-horizon].mean()) == (y_test > y_test[:-horizon].mean())).mean() * 100
+        # MSE on log returns
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = np.sqrt(mse)
+        
+        # Direction accuracy (up/down)
+        direction_correct = ((y_pred > 0) == (y_test > 0)).mean() * 100
+        
+        # MAPE on actual prices (convert log returns back)
+        # For display only - inference will use log returns
+        test_base_idx = val_end + 60  # Account for sequence length
+        actual_prices = closes[test_base_idx + horizon : test_base_idx + horizon + len(y_test)]
+        pred_prices = closes[test_base_idx : test_base_idx + len(y_test)] * np.exp(y_pred)
+        mape = mean_absolute_percentage_error(actual_prices, pred_prices) * 100
         
         print(f"\n{horizon}min Test Metrics:")
-        print(f"  RMSE: ${rmse:.2f}")
-        print(f"  MAPE: {mape:.2f}%")
+        print(f"  RMSE (log returns): {rmse:.6f}")
+        print(f"  MAPE (actual $): {mape:.2f}%")
         print(f"  Direction Accuracy: {direction_correct:.2f}%")
         
-        # Export ONNX
+        # Export to ONNX
         onnx_path = MODELS_DIR / f'lstm_btc_{horizon}min.onnx'
         input_sig = [tf.TensorSpec(shape=(None, 60, 9), dtype=tf.float32, name='input')]
         tf2onnx.convert.from_keras(model, input_signature=input_sig, opset=14, output_path=str(onnx_path))
@@ -308,9 +328,10 @@ def main():
         # Register in DB
         metrics = {
             'horizon': horizon,
-            'test_rmse': float(rmse),
+            'test_rmse_log': float(rmse),
             'test_mape': float(mape),
             'direction_acc': float(direction_correct),
+            'uses_log_returns': True  # IMPORTANT!
         }
         
         register_model_in_db(
@@ -324,18 +345,20 @@ def main():
             (datetime.now() - start_time).total_seconds()
         )
     
-    # Save shared normalization params
+    # Save normalization params
     norm_params = {
         'mean': scaler.mean_.tolist(),
-        'std': scaler.scale_.tolist()
+        'std': scaler.scale_.tolist(),
+        'uses_log_returns': True  # Tell inference to use exp()
     }
     with open(MODELS_DIR / 'normalization_params.json', 'w') as f:
-        json.dump(norm_params, f)
+        json.dump(norm_params, f, indent=2)
     
     print(f"\n{'='*80}")
     print(f"✓ All 3 models trained and exported!")
     print(f"✓ Version: {version}")
     print(f"✓ Duration: {(datetime.now() - start_time).total_seconds():.1f}s")
+    print(f"✓ Output format: LOG RETURNS (use exp() for price)")
     print('='*80)
 
 if __name__ == "__main__":

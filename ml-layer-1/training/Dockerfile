@@ -1,37 +1,33 @@
-FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu22.04
+# Najnowszy NVIDIA NGC TensorFlow z RTX 5090 support
+FROM nvcr.io/nvidia/tensorflow:25.02-tf2-py3
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
 
-# Install Python 3.12 from deadsnakes PPA
+# Install PostgreSQL client libs
 RUN apt-get update && apt-get install -y \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y \
-    python3.12 \
-    python3.12-dev \
-    python3.12-distutils \
-    python3-pip \
-    build-essential \
     libpq-dev \
-    curl \
     && rm -rf /var/lib/apt/lists/*
-
-# Set Python 3.12 as default
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
-
-# Upgrade pip for Python 3.12
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.12
 
 WORKDIR /app/training
 
+# Upgrade pip
+RUN pip install --upgrade pip setuptools wheel
+
 COPY requirements.txt .
-RUN python3.12 -m pip install --no-cache-dir -r requirements.txt
+
+# Install only non-TensorFlow deps
+RUN grep -v "^tensorflow" requirements.txt > requirements_filtered.txt && \
+    pip install --no-cache-dir -r requirements_filtered.txt || \
+    pip install --no-cache-dir -r requirements.txt
 
 COPY train.py .
 RUN mkdir -p /app/models
 
-ENV PYTHONUNBUFFERED=1
 ENV CUDA_VISIBLE_DEVICES=0
-ENV TF_ENABLE_ONEDNN_OPTS=0
+ENV TF_CPP_MIN_LOG_LEVEL=3
+ENV CUDA_LAUNCH_BLOCKING=0
+ENV XLA_FLAGS="--xla_gpu_cuda_data_dir=/usr/local/cuda"
 
-CMD ["python3.12", "train.py"]
+
+CMD ["python", "train.py"]

@@ -141,8 +141,7 @@ async fn main() -> Result<()> {
 async fn get_latest_candle_time(client: &Arc<Client>) -> Result<DateTime<Utc>> {
     let row = client
         .query_one(
-            "SELECT time FROM klines 
-             WHERE symbol = 'BTCUSDT' AND interval = '1m'
+            "SELECT time FROM candles_1m 
              ORDER BY time DESC LIMIT 1",
             &[],
         )
@@ -197,8 +196,7 @@ async fn fetch_candles(client: &Arc<Client>) -> Result<Vec<Candle>> {
     let rows = client
         .query(
             "SELECT time, close, high, low, volume 
-             FROM klines 
-             WHERE symbol = 'BTCUSDT' AND interval = '1m'
+             FROM candles_1m 
              ORDER BY time DESC 
              LIMIT 100",
             &[],
