@@ -1,8 +1,6 @@
 /*!
 ML Inference Service
-Runs ONNX inference and writes predictions to TimescaleDB
-
-Flow: Candles (DB) → Inference → Predictions (DB) → data-ws streams
+Runs ONNX inference with proper 9 features matching train.py
 */
 
 use anyhow::Result;
@@ -10,6 +8,7 @@ use chrono::{DateTime, Utc};
 use ndarray::Array1;
 use ort::{Environment, ExecutionProvider, Session, SessionBuilder, Value};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -33,9 +32,13 @@ struct Candle {
     volume: f64,
 }
 
+struct ModelSession {
+    session: Session,
+    horizon: usize, // 1, 5, or 15
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
@@ -46,7 +49,6 @@ async fn main() -> Result<()> {
     info!("ML Inference Service - Starting");
     info!("=" .repeat(80));
 
-    // Load config
     dotenvy::dotenv().ok();
 
     let db_host = std::env::var("DB_HOST").unwrap_or_else(|_| "localhost".to_string());
@@ -54,10 +56,8 @@ async fn main() -> Result<()> {
     let db_name = std::env::var("DB_NAME").unwrap_or_else(|_| "btc_ml_production".to_string());
     let db_user = std::env::var("DB_USER").unwrap_or_else(|_| "mltrader".to_string());
     let db_password = std::env::var("DB_PASSWORD").unwrap_or_else(|_| "password".to_string());
-    let model_path = std::env::var("ML_MODEL_PATH")
-        .unwrap_or_else(|_| "/app/models/lstm_btc.onnx".to_string());
-    let norm_path = std::env::var("ML_NORM_PATH")
-        .unwrap_or_else(|_| "/app/models/normalization_params.json".to_string());
+    let models_dir = std::env::var("ML_MODELS_DIR").unwrap_or_else(|_| "/app/models".to_string());
+    let norm_path = format!("{}/normalization_params.json", models_dir);
 
     // Connect to database
     let conn_str = format!(
@@ -77,18 +77,32 @@ async fn main() -> Result<()> {
     let client = Arc::new(client);
     info!("✓ Database connected");
 
-    // Load ONNX model
-    info!("Loading ONNX model: {}", model_path);
+    // Load ONNX models (3 horizons)
+    info!("Loading ONNX models...");
     let environment = Arc::new(Environment::builder().with_name("ml-inference").build()?);
 
-    let session = SessionBuilder::new(&environment)?
-        .with_execution_providers([
-            ExecutionProvider::TensorRT(Default::default()),
-            ExecutionProvider::CUDA(Default::default()),
-        ])?
-        .with_model_from_file(&model_path)?;
+    let mut models = HashMap::new();
+    for horizon in [1, 5, 15] {
+        let model_path = format!("{}/lstm_btc_{}min.onnx", models_dir, horizon);
+        
+        if Path::new(&model_path).exists() {
+            let session = SessionBuilder::new(&environment)?
+                .with_execution_providers([
+                    ExecutionProvider::TensorRT(Default::default()),
+                    ExecutionProvider::CUDA(Default::default()),
+                ])?
+                .with_model_from_file(&model_path)?;
+            
+            models.insert(horizon, ModelSession { session, horizon });
+            info!("✓ Loaded {}-min model", horizon);
+        } else {
+            warn!("Model not found: {}", model_path);
+        }
+    }
 
-    info!("✓ ONNX model loaded");
+    if models.is_empty() {
+        anyhow::bail!("No models found! Train models first.");
+    }
 
     // Load normalization params
     info!("Loading normalization params: {}", norm_path);
@@ -100,19 +114,16 @@ async fn main() -> Result<()> {
     info!("Starting inference loop (checks for new data every 30s)");
     info!("=" .repeat(80));
 
-    // Inference loop - check for new data frequently
     let mut tick = interval(Duration::from_secs(30));
     let mut last_processed_time: Option<DateTime<Utc>> = None;
 
     loop {
         tick.tick().await;
 
-        // Check if there's new data
         match get_latest_candle_time(&client).await {
             Ok(latest_time) => {
-                // Only run inference if there's new data
                 if last_processed_time.map_or(true, |t| latest_time > t) {
-                    match run_inference(&client, &session, &norm_params, latest_time).await {
+                    match run_inference(&client, &models, &norm_params, latest_time).await {
                         Ok(latency) => {
                             info!("✓ Inference complete: {:.2}ms at {}", latency, latest_time);
                             last_processed_time = Some(latest_time);
@@ -121,8 +132,6 @@ async fn main() -> Result<()> {
                             error!("Inference failed: {}", e);
                         }
                     }
-                } else {
-                    // No new data yet
                 }
             }
             Err(e) => {
@@ -147,13 +156,13 @@ async fn get_latest_candle_time(client: &Arc<Client>) -> Result<DateTime<Utc>> {
 
 async fn run_inference(
     client: &Arc<Client>,
-    session: &Session,
+    models: &HashMap<usize, ModelSession>,
     norm_params: &NormalizationParams,
     candle_time: DateTime<Utc>,
 ) -> Result<f64> {
     let start = Instant::now();
 
-    // 1. Fetch last 60 candles
+    // 1. Fetch last 100 candles (need 60 for features)
     let candles = fetch_candles(client).await?;
 
     if candles.len() < 60 {
@@ -162,18 +171,31 @@ async fn run_inference(
 
     let latest_60 = &candles[candles.len() - 60..];
 
-    // 2. Compute features
+    // 2. Compute 9 features (matching train.py)
     let features = compute_features(latest_60)?;
 
-    // 3. Normalize
+    // 3. Normalize features
     let features_norm = normalize_features(&features, norm_params);
 
-    // 4. Run ONNX inference (multi-horizon)
-    let (pred_1min, pred_5min, pred_15min) = run_onnx_inference(session, &features_norm)?;
+    // 4. Run inference for each horizon
+    let mut predictions = HashMap::new();
+    
+    for (horizon, model_session) in models {
+        let pred = run_onnx_inference(&model_session.session, &features_norm)?;
+        predictions.insert(*horizon, pred);
+    }
 
     // 5. Write to database
     let current_price = latest_60.last().unwrap().close;
-    write_predictions(client, candle_time, current_price, pred_1min, pred_5min, pred_15min).await?;
+    write_predictions(
+        client,
+        candle_time,
+        current_price,
+        predictions.get(&1).copied(),
+        predictions.get(&5).copied(),
+        predictions.get(&15).copied(),
+    )
+    .await?;
 
     let latency = start.elapsed().as_secs_f64() * 1000.0;
     Ok(latency)
@@ -206,43 +228,168 @@ async fn fetch_candles(client: &Arc<Client>) -> Result<Vec<Candle>> {
     Ok(candles)
 }
 
+// ============================================================================
+// FEATURE COMPUTATION (9 features matching train.py)
+// ============================================================================
+
 fn compute_features(candles: &[Candle]) -> Result<Vec<f64>> {
-    // Simplified: just use price, volume for now
-    // In production, implement full 9 features matching training
-    let mut features = Vec::new();
+    let n = candles.len();
+    let closes: Vec<f64> = candles.iter().map(|c| c.close).collect();
+    let highs: Vec<f64> = candles.iter().map(|c| c.high).collect();
+    let lows: Vec<f64> = candles.iter().map(|c| c.low).collect();
+    let volumes: Vec<f64> = candles.iter().map(|c| c.volume).collect();
 
-    let close = candles.last().unwrap().close;
-    let volume = candles.last().unwrap().volume;
+    let last_idx = n - 1;
 
-    // Price norm (simplified)
-    let prices: Vec<f64> = candles.iter().map(|c| c.close).collect();
-    let mean = prices.iter().sum::<f64>() / prices.len() as f64;
-    let std = (prices.iter().map(|p| (p - mean).powi(2)).sum::<f64>() / prices.len() as f64)
-        .sqrt();
-    features.push((close - mean) / (std + 1e-8));
+    // 1. Price normalization (SMA 60)
+    let sma60 = calculate_sma(&closes, 60);
+    let std60 = calculate_std(&closes, 60);
+    let price_norm = (closes[last_idx] - sma60[last_idx]) / (std60 + 1e-8);
 
-    // RSI (simplified - use last close)
-    features.push(0.5);
+    // 2. RSI (14-period)
+    let rsi = calculate_rsi(&closes, 14);
+    let rsi_val = rsi[last_idx];
 
-    // MACD, Signal, Hist
-    features.push(0.0);
-    features.push(0.0);
-    features.push(0.0);
+    // 3-5. MACD
+    let ema12 = calculate_ema(&closes, 12);
+    let ema26 = calculate_ema(&closes, 26);
+    let macd: Vec<f64> = ema12.iter().zip(&ema26).map(|(a, b)| a - b).collect();
+    let signal = calculate_ema(&macd, 9);
+    let histogram: Vec<f64> = macd.iter().zip(&signal).map(|(m, s)| m - s).collect();
+    
+    let macd_val = macd[last_idx];
+    let signal_val = signal[last_idx];
+    let hist_val = histogram[last_idx];
 
-    // BB position
-    features.push(0.5);
+    // 6. Bollinger Bands position
+    let sma20 = calculate_sma(&closes, 20);
+    let std20 = calculate_std(&closes, 20);
+    let upper = sma20[last_idx] + 2.0 * std20;
+    let lower = sma20[last_idx] - 2.0 * std20;
+    let bb_position = ((closes[last_idx] - lower) / (upper - lower + 1e-8)).clamp(0.0, 1.0);
 
-    // Volume ratio
-    features.push(1.0);
+    // 7. Volume ratio
+    let sma_vol = calculate_sma(&volumes, 20);
+    let vol_ratio = volumes[last_idx] / (sma_vol[last_idx] + 1e-8);
 
-    // Returns
-    features.push(0.0);
+    // 8. Returns
+    let returns = if last_idx > 0 {
+        (closes[last_idx] - closes[last_idx - 1]) / (closes[last_idx - 1] + 1e-8)
+    } else {
+        0.0
+    };
 
-    // ATR
-    features.push(1.0);
+    // 9. ATR (14-period)
+    let atr = calculate_atr(&highs, &lows, &closes, 14);
+    let atr_val = atr[last_idx];
 
-    Ok(features)
+    Ok(vec![
+        price_norm,
+        rsi_val,
+        macd_val,
+        signal_val,
+        hist_val,
+        bb_position,
+        vol_ratio,
+        returns,
+        atr_val,
+    ])
 }
+
+fn calculate_sma(prices: &[f64], period: usize) -> Vec<f64> {
+    let n = prices.len();
+    let mut sma = vec![0.0; n];
+    
+    for i in 0..n {
+        if i < period - 1 {
+            sma[i] = prices[..=i].iter().sum::<f64>() / (i + 1) as f64;
+        } else {
+            sma[i] = prices[i - period + 1..=i].iter().sum::<f64>() / period as f64;
+        }
+    }
+    
+    sma
+}
+
+fn calculate_std(prices: &[f64], period: usize) -> f64 {
+    let n = prices.len();
+    if n < period {
+        return 0.0;
+    }
+    
+    let window = &prices[n - period..];
+    let mean = window.iter().sum::<f64>() / period as f64;
+    let variance = window.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / period as f64;
+    variance.sqrt()
+}
+
+fn calculate_ema(prices: &[f64], period: usize) -> Vec<f64> {
+    let n = prices.len();
+    let mut ema = vec![0.0; n];
+    ema[0] = prices[0];
+    
+    let multiplier = 2.0 / (period as f64 + 1.0);
+    
+    for i in 1..n {
+        ema[i] = (prices[i] - ema[i - 1]) * multiplier + ema[i - 1];
+    }
+    
+    ema
+}
+
+fn calculate_rsi(prices: &[f64], period: usize) -> Vec<f64> {
+    let n = prices.len();
+    let mut rsi = vec![0.5; n];
+    
+    if n < period + 1 {
+        return rsi;
+    }
+    
+    let mut gains = vec![0.0; n];
+    let mut losses = vec![0.0; n];
+    
+    for i in 1..n {
+        let delta = prices[i] - prices[i - 1];
+        if delta > 0.0 {
+            gains[i] = delta;
+        } else {
+            losses[i] = -delta;
+        }
+    }
+    
+    // Initial averages
+    let mut avg_gain = gains[1..=period].iter().sum::<f64>() / period as f64;
+    let mut avg_loss = losses[1..=period].iter().sum::<f64>() / period as f64;
+    
+    for i in period..n {
+        avg_gain = (avg_gain * (period as f64 - 1.0) + gains[i]) / period as f64;
+        avg_loss = (avg_loss * (period as f64 - 1.0) + losses[i]) / period as f64;
+        
+        let rs = if avg_loss != 0.0 { avg_gain / avg_loss } else { 0.0 };
+        rsi[i] = 1.0 - (1.0 / (1.0 + rs));
+    }
+    
+    rsi
+}
+
+fn calculate_atr(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> Vec<f64> {
+    let n = highs.len();
+    let mut tr = vec![0.0; n];
+    
+    tr[0] = highs[0] - lows[0];
+    
+    for i in 1..n {
+        tr[i] = (highs[i] - lows[i])
+            .max((highs[i] - closes[i - 1]).abs())
+            .max((lows[i] - closes[i - 1]).abs());
+    }
+    
+    calculate_ema(&tr, period)
+}
+
+// ============================================================================
+// NORMALIZATION (matching train.py StandardScaler)
+// ============================================================================
 
 fn normalize_features(features: &[f64], params: &NormalizationParams) -> Vec<f64> {
     features
@@ -253,42 +400,42 @@ fn normalize_features(features: &[f64], params: &NormalizationParams) -> Vec<f64
         .collect()
 }
 
-fn run_onnx_inference(session: &Session, features: &[f64]) -> Result<(f64, f64, f64)> {
-    // Create input tensor: (1, 60, 9)
-    let mut input_data = vec![0.0f32; 60 * 9];
+// ============================================================================
+// ONNX INFERENCE
+// ============================================================================
 
+fn run_onnx_inference(session: &Session, features: &[f64]) -> Result<f64> {
+    // Create input tensor: (1, 60, 9)
+    // We only have features for last timestep, fill rest with zeros
+    let mut input_data = vec![0.0f32; 60 * 9];
+    
     // Fill last timestep with features
     for (i, &f) in features.iter().enumerate() {
         input_data[59 * 9 + i] = f as f32;
     }
-
+    
     let input_tensor = Array1::from_vec(input_data)
         .into_shape((1, 60, 9))?
         .into_dyn();
-
-    let outputs = session.run(vec![Value::from_array(session.allocator(), &input_tensor)?])?;
-
-    let output: Vec<f32> = outputs[0].try_extract()?.view().to_slice().unwrap().to_vec();
-
-    // Base prediction
-    let pred_base = output[0] as f64;
     
-    // Multi-horizon: simple extrapolation for now
-    // TODO: Train separate models for each horizon
-    let pred_1min = pred_base;
-    let pred_5min = pred_base * 1.002; // Slightly higher
-    let pred_15min = pred_base * 1.005; // Even higher
-
-    Ok((pred_1min, pred_5min, pred_15min))
+    let outputs = session.run(vec![Value::from_array(session.allocator(), &input_tensor)?])?;
+    
+    let output: Vec<f32> = outputs[0].try_extract()?.view().to_slice().unwrap().to_vec();
+    
+    Ok(output[0] as f64)
 }
+
+// ============================================================================
+// DATABASE WRITE
+// ============================================================================
 
 async fn write_predictions(
     client: &Arc<Client>,
     candle_time: DateTime<Utc>,
     current_price: f64,
-    pred_1min: f64,
-    pred_5min: f64,
-    pred_15min: f64,
+    pred_1min: Option<f64>,
+    pred_5min: Option<f64>,
+    pred_15min: Option<f64>,
 ) -> Result<()> {
     client
         .execute(
@@ -300,13 +447,13 @@ async fn write_predictions(
             &[
                 &candle_time,
                 &rust_decimal::Decimal::from_f64_retain(current_price).unwrap(),
-                &rust_decimal::Decimal::from_f64_retain(pred_1min).unwrap(),
-                &rust_decimal::Decimal::from_f64_retain(pred_5min).unwrap(),
-                &rust_decimal::Decimal::from_f64_retain(pred_15min).unwrap(),
-                &0.75f32, // confidence (TODO: calculate from model)
-                &0.70f32,
-                &0.65f32,
-                &"v1.0",
+                &pred_1min.map(|p| rust_decimal::Decimal::from_f64_retain(p).unwrap()),
+                &pred_5min.map(|p| rust_decimal::Decimal::from_f64_retain(p).unwrap()),
+                &pred_15min.map(|p| rust_decimal::Decimal::from_f64_retain(p).unwrap()),
+                &pred_1min.map(|_| 0.75f32),
+                &pred_5min.map(|_| 0.70f32),
+                &pred_15min.map(|_| 0.65f32),
+                &"multi-horizon-v1",
             ],
         )
         .await?;

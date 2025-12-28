@@ -1,12 +1,6 @@
 """
 ML Layer 1 - Training Pipeline
-Trains multi-horizon LSTM models and auto-selects best performer
-
-Features:
-- Multi-horizon: 1min, 5min, 15min
-- Auto model selection based on historical performance
-- Activates best model in database
-- Evaluates on historical predictions if available
+Exports 3 separate ONNX models (1min, 5min, 15min)
 """
 
 import os
@@ -29,8 +23,6 @@ print("GPUs available:", tf.config.list_physical_devices('GPU'))
 # Enable mixed precision for RTX 5090
 policy = tf.keras.mixed_precision.Policy('mixed_float16')
 tf.keras.mixed_precision.set_global_policy(policy)
-
-# Enable TensorFloat-32 for A100/5090
 tf.config.experimental.enable_tensor_float_32_execution(True)
 
 class FeatureComputer:
@@ -166,7 +158,7 @@ def build_model(seq_len=60, n_features=9):
     """Optimized for RTX 5090"""
     model = keras.Sequential([
         layers.Input(shape=(seq_len, n_features)),
-        layers.LSTM(128, return_sequences=True),  # Increased capacity
+        layers.LSTM(128, return_sequences=True),
         layers.Dropout(0.2),
         layers.LSTM(64),
         layers.Dropout(0.2),
@@ -180,26 +172,30 @@ def build_model(seq_len=60, n_features=9):
     )
     return model
 
-def register_model_in_db(db_config, version, model_path, norm_params, metrics, samples, duration):
+def register_model_in_db(db_config, version, horizon, model_path, norm_params, metrics, samples, duration):
     """Register trained model in database"""
     conn = psycopg2.connect(**db_config)
     cur = conn.cursor()
     
-    # Deactivate all models first
-    cur.execute("UPDATE ml_models SET is_active = FALSE")
-    
-    # Insert new model
+    # Insert new model (don't deactivate others - we have 3 models now)
     cur.execute("""
         INSERT INTO ml_models 
         (version, model_path, normalization_params, training_metrics, 
          is_active, trained_on_samples, training_duration_seconds, test_rmse, test_mape)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (version) DO UPDATE SET
+            model_path = EXCLUDED.model_path,
+            normalization_params = EXCLUDED.normalization_params,
+            training_metrics = EXCLUDED.training_metrics,
+            is_active = EXCLUDED.is_active,
+            test_rmse = EXCLUDED.test_rmse,
+            test_mape = EXCLUDED.test_mape
     """, (
-        version,
+        f"{version}_{horizon}min",
         model_path,
         json.dumps(norm_params),
         json.dumps(metrics),
-        True,  # Activate immediately
+        True,  # All models active
         samples,
         duration,
         metrics.get('test_rmse'),
@@ -209,13 +205,11 @@ def register_model_in_db(db_config, version, model_path, norm_params, metrics, s
     conn.commit()
     cur.close()
     conn.close()
-    
-    print(f"✓ Model {version} registered and activated in database")
 
 def main():
     print("=" * 80)
-    print("ML Layer 1 - Multi-Horizon Training")
-    print("GPU: RTX 5090 | CUDA 12.8 | Mixed Precision FP16")
+    print("ML Layer 1 - Multi-Horizon Training (3 Models)")
+    print("GPU: RTX 5090 | CUDA 12.8 | TensorFlow 2.18")
     print("=" * 80)
     
     DB_CONFIG = {
@@ -226,7 +220,7 @@ def main():
         'password': os.getenv("DB_PASSWORD", "your_secure_password_here")
     }
     
-    MODELS_DIR = Path(os.getenv("ML_MODELS_DIR", "../models"))
+    MODELS_DIR = Path(os.getenv("ML_MODELS_DIR", "/app/models"))
     MODELS_DIR.mkdir(parents=True, exist_ok=True)
     
     start_time = datetime.now()
@@ -240,9 +234,12 @@ def main():
     print("\nComputing features...")
     features = FeatureComputer.compute_features(closes, highs, lows, volumes)
     
-    # Train for 3 horizons
-    horizons = [1, 5, 15]  # minutes
-    models = {}
+    # Train for 3 horizons - EXPORT ALL 3
+    horizons = [1, 5, 15]
+    version = f"v{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    # Use SAME scaler for all models
+    scaler = StandardScaler()
     
     for horizon in horizons:
         print(f"\n{'='*80}")
@@ -256,9 +253,11 @@ def main():
         features_h = features[valid]
         targets_h = targets[valid]
         
-        # Normalize
-        scaler = StandardScaler()
-        features_norm = np.clip(scaler.fit_transform(features_h), -10, 10)
+        # Normalize (fit scaler only on first horizon, reuse for others)
+        if horizon == 1:
+            features_norm = np.clip(scaler.fit_transform(features_h), -10, 10)
+        else:
+            features_norm = np.clip(scaler.transform(features_h), -10, 10)
         
         # Split
         n = len(features_norm)
@@ -279,7 +278,7 @@ def main():
             X_train, y_train,
             validation_data=(X_val, y_val),
             epochs=50,
-            batch_size=64,  # Larger batch for 5090
+            batch_size=64,
             callbacks=[
                 callbacks.EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True),
                 callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, min_lr=1e-6)
@@ -292,7 +291,6 @@ def main():
         rmse = np.sqrt(mean_squared_error(y_test, y_pred))
         mape = mean_absolute_percentage_error(y_test, y_pred) * 100
         
-        # Direction accuracy
         direction_correct = ((y_pred > y_test[:-horizon].mean()) == (y_test > y_test[:-horizon].mean())).mean() * 100
         
         print(f"\n{horizon}min Test Metrics:")
@@ -300,65 +298,45 @@ def main():
         print(f"  MAPE: {mape:.2f}%")
         print(f"  Direction Accuracy: {direction_correct:.2f}%")
         
-        models[horizon] = {
-            'model': model,
-            'scaler': scaler,
-            'rmse': rmse,
-            'mape': mape,
-            'direction_acc': direction_correct
+        # Export ONNX
+        onnx_path = MODELS_DIR / f'lstm_btc_{horizon}min.onnx'
+        input_sig = [tf.TensorSpec(shape=(None, 60, 9), dtype=tf.float32, name='input')]
+        tf2onnx.convert.from_keras(model, input_signature=input_sig, opset=14, output_path=str(onnx_path))
+        
+        print(f"✓ Exported: {onnx_path}")
+        
+        # Register in DB
+        metrics = {
+            'horizon': horizon,
+            'test_rmse': float(rmse),
+            'test_mape': float(mape),
+            'direction_acc': float(direction_correct),
         }
+        
+        register_model_in_db(
+            DB_CONFIG,
+            version,
+            horizon,
+            str(onnx_path),
+            {'mean': scaler.mean_.tolist(), 'std': scaler.scale_.tolist()},
+            metrics,
+            len(X_train),
+            (datetime.now() - start_time).total_seconds()
+        )
     
-    # Select best model (lowest MAPE on 15min)
-    best_horizon = min(models.keys(), key=lambda h: models[h]['mape'])
-    print(f"\n{'='*80}")
-    print(f"Best model: {best_horizon}-minute (MAPE: {models[best_horizon]['mape']:.2f}%)")
-    print('='*80)
-    
-    # Export best model
-    best_model = models[best_horizon]['model']
-    best_scaler = models[best_horizon]['scaler']
-    
-    onnx_path = MODELS_DIR / 'lstm_btc.onnx'
-    input_sig = [tf.TensorSpec(shape=(None, 60, 9), dtype=tf.float32, name='input')]
-    tf2onnx.convert.from_keras(best_model, input_signature=input_sig, opset=14, output_path=str(onnx_path))
-    
-    print(f"✓ Exported ONNX: {onnx_path}")
-    
-    # Save normalization params
+    # Save shared normalization params
     norm_params = {
-        'mean': best_scaler.mean_.tolist(),
-        'std': best_scaler.scale_.tolist()
+        'mean': scaler.mean_.tolist(),
+        'std': scaler.scale_.tolist()
     }
     with open(MODELS_DIR / 'normalization_params.json', 'w') as f:
         json.dump(norm_params, f)
     
-    # Save metadata
-    training_duration = (datetime.now() - start_time).total_seconds()
-    metadata = {
-        'best_horizon': best_horizon,
-        'all_models': {h: {'rmse': m['rmse'], 'mape': m['mape'], 'direction_acc': m['direction_acc']} 
-                       for h, m in models.items()},
-        'timestamp': datetime.now().isoformat(),
-        'training_duration': training_duration,
-        'gpu': 'RTX_5090'
-    }
-    with open(MODELS_DIR / 'model_metadata.json', 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    # Register in database
-    version = f"v{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    register_model_in_db(
-        DB_CONFIG,
-        version,
-        str(onnx_path),
-        norm_params,
-        metadata,
-        len(X_train),
-        training_duration
-    )
-    
-    print(f"\n✓ Training complete! Duration: {training_duration:.1f}s")
-    print(f"✓ Model {version} activated for inference")
+    print(f"\n{'='*80}")
+    print(f"✓ All 3 models trained and exported!")
+    print(f"✓ Version: {version}")
+    print(f"✓ Duration: {(datetime.now() - start_time).total_seconds():.1f}s")
+    print('='*80)
 
 if __name__ == "__main__":
     main()
