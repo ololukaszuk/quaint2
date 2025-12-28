@@ -1,20 +1,27 @@
 [package]
-name = "ml-inference"
+name = "data-ws"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# ONNX Runtime
-ort = { version = "2.0.0-rc.10", features = ["cuda", "tensorrt"] }
-
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+
+# Web framework
+axum = { version = "0.7", features = ["ws"] }
+axum-server = { version = "0.6", features = ["tls-rustls"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# TLS
+rustls = "0.22"
+rustls-pemfile = "2.0"
+rcgen = "0.12"
 
 # Database
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
-
-# Numerical
-ndarray = "0.15"
+deadpool-postgres = "0.12"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -34,8 +41,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Environment
 dotenvy = "0.15"
 
-# Decimal for DB
+# Decimal
 rust_decimal = "1.33"
+
+# Futures
+futures-util = "0.3"
 
 [profile.release]
 opt-level = 3
