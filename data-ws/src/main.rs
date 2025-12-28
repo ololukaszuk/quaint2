@@ -42,14 +42,11 @@ struct Prediction {
     current_price: f64,
     predicted_1min: Option<f64>,
     predicted_5min: Option<f64>,
-    predicted_10min: Option<f64>,
     predicted_15min: Option<f64>,
     confidence_1min: Option<f32>,
     confidence_5min: Option<f32>,
-    confidence_10min: Option<f32>,
     confidence_15min: Option<f32>,
     model_version: Option<String>,
-    inference_latency_ms: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -193,9 +190,9 @@ async fn latest_prediction_handler(
     let row = client
         .query_opt(
             "SELECT time, current_price, predicted_1min, predicted_5min, 
-                    predicted_10min, predicted_15min, confidence_1min, 
-                    confidence_5min, confidence_10min, confidence_15min,
-                    model_version, inference_latency_ms
+                    predicted_15min, confidence_1min, 
+                    confidence_5min, confidence_15min,
+                    model_version
              FROM ml_predictions
              ORDER BY time DESC
              LIMIT 1",
@@ -219,18 +216,13 @@ async fn latest_prediction_handler(
                 predicted_5min: row
                     .get::<_, Option<rust_decimal::Decimal>>(3)
                     .map(|d| d.to_string().parse().unwrap()),
-                predicted_10min: row
+                predicted_15min: row
                     .get::<_, Option<rust_decimal::Decimal>>(4)
                     .map(|d| d.to_string().parse().unwrap()),
-                predicted_15min: row
-                    .get::<_, Option<rust_decimal::Decimal>>(5)
-                    .map(|d| d.to_string().parse().unwrap()),
-                confidence_1min: row.get(6),
-                confidence_5min: row.get(7),
-                confidence_10min: row.get(8),
-                confidence_15min: row.get(9),
-                model_version: row.get(10),
-                inference_latency_ms: row.get(11),
+                confidence_1min: row.get(5),
+                confidence_5min: row.get(6),
+                confidence_15min: row.get(7),
+                model_version: row.get(8),
             };
 
             Ok(Json(APIResponse {
@@ -306,9 +298,9 @@ async fn fetch_latest_prediction(pool: &Pool) -> anyhow::Result<Option<Predictio
     let row = client
         .query_opt(
             "SELECT time, current_price, predicted_1min, predicted_5min, 
-                    predicted_10min, predicted_15min, confidence_1min, 
-                    confidence_5min, confidence_10min, confidence_15min,
-                    model_version, inference_latency_ms
+                    predicted_15min, confidence_1min, 
+                    confidence_5min, confidence_15min,
+                    model_version
              FROM ml_predictions
              ORDER BY time DESC
              LIMIT 1",
@@ -329,18 +321,13 @@ async fn fetch_latest_prediction(pool: &Pool) -> anyhow::Result<Option<Predictio
         predicted_5min: row
             .get::<_, Option<rust_decimal::Decimal>>(3)
             .map(|d| d.to_string().parse().unwrap()),
-        predicted_10min: row
+        predicted_15min: row
             .get::<_, Option<rust_decimal::Decimal>>(4)
             .map(|d| d.to_string().parse().unwrap()),
-        predicted_15min: row
-            .get::<_, Option<rust_decimal::Decimal>>(5)
-            .map(|d| d.to_string().parse().unwrap()),
-        confidence_1min: row.get(6),
-        confidence_5min: row.get(7),
-        confidence_10min: row.get(8),
-        confidence_15min: row.get(9),
-        model_version: row.get(10),
-        inference_latency_ms: row.get(11),
+        confidence_1min: row.get(5),
+        confidence_5min: row.get(6),
+        confidence_15min: row.get(7),
+        model_version: row.get(8),
     }))
 }
 
