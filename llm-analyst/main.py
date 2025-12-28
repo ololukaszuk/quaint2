@@ -130,11 +130,13 @@ class LLMAnalystService:
         """
         Smart trigger: check prediction state and market requests.
         
-        Only run new analysis when:
+        Run new analysis when:
         1. Market-analyzer explicitly requests (pending llm_requests)
         2. Active prediction invalidated (price crossed invalidation level)
-        3. Active prediction fulfilled (target reached)
-        4. Prediction stale (4h+ with 2%+ move)
+        3. Active prediction fulfilled (1h or 4h target reached)
+        4. Both targets hit (successful prediction - time to update!)
+        5. Targets missed after 5+ hours (prediction didn't pan out)
+        6. Prediction stale (6+ hours, or 4+ hours with move, or 2+ hours with big move)
         """
         if not self.db or not self.db.pool:
             return
@@ -160,20 +162,34 @@ class LLMAnalystService:
             if not current_price:
                 return
             
-            # Check invalidation
+            # Priority 2: Check invalidation (prediction proven wrong)
             if (invalidation := self.check_invalidation(current_price)):
                 logger.info(f"🚨 INVALIDATED: {invalidation}")
                 await self.run_new_analysis(f"invalidated:{invalidation}")
                 return
             
-            # Check fulfillment
+            # Priority 3: Check if single target hit (partial fulfillment)
             fulfillment = await self.check_fulfillment(current_price)
             if fulfillment:
-                logger.info(f"âœ… TARGET HIT: {fulfillment}")
+                logger.info(f"✅ TARGET HIT: {fulfillment}")
                 await self.run_new_analysis(f"fulfilled:{fulfillment}")
                 return
             
-            # Check staleness
+            # Priority 4: Check if BOTH targets hit (full success!)
+            both_targets = await self.check_both_targets_hit(current_price)
+            if both_targets:
+                logger.info(f"🎯 SUCCESS: {both_targets}")
+                await self.run_new_analysis(f"success:{both_targets}")
+                return
+            
+            # Priority 5: Check if targets missed after enough time
+            missed = await self.check_targets_missed(current_price)
+            if missed:
+                logger.info(f"⏱️  TARGETS MISSED: {missed}")
+                await self.run_new_analysis(f"missed:{missed}")
+                return
+            
+            # Priority 6: Check general staleness
             if (staleness := self.check_staleness(current_price)):
                 logger.info(f"⏰ STALE: {staleness}")
                 await self.run_new_analysis(f"stale:{staleness}")
@@ -389,7 +405,14 @@ class LLMAnalystService:
         return None
 
     def check_staleness(self, current_price: float) -> Optional[str]:
-        """Check if prediction stale (4h+ with 2%+ move)."""
+        """
+        Check if prediction is stale and needs refresh.
+        
+        Triggers:
+        1. After 6+ hours (prediction window expired)
+        2. After 4+ hours with 1.5%+ move
+        3. After 2+ hours with 3%+ move (significant deviation)
+        """
         if not self.active_prediction:
             return None
         
@@ -397,14 +420,147 @@ class LLMAnalystService:
         pred_price = float(self.active_prediction['price'])
         
         hours_elapsed = (datetime.now(timezone.utc) - pred_time).total_seconds() / 3600
+        move_pct = abs((current_price - pred_price) / pred_price) * 100
         
+        # After 6 hours, prediction is definitely stale (4h target window + 2h buffer)
+        if hours_elapsed >= 6:
+            return f"{hours_elapsed:.1f}h elapsed (prediction window expired)"
+        
+        # After 4 hours with moderate move
+        if hours_elapsed >= 4 and move_pct >= 1.5:
+            return f"{hours_elapsed:.1f}h, {move_pct:.2f}% move from ${pred_price:,.0f}"
+        
+        # After 2 hours with significant move
+        if hours_elapsed >= 2 and move_pct >= 3.0:
+            return f"{hours_elapsed:.1f}h, {move_pct:.2f}% significant move"
+        
+        return None
+    
+    async def check_both_targets_hit(self, current_price: float) -> Optional[str]:
+        """
+        Check if both 1h AND 4h targets were reached - this is a successful prediction!
+        Should trigger new analysis to acknowledge success.
+        """
+        if not self.active_prediction or not self.db or not self.db.pool:
+            return None
+        
+        pred_time = self.active_prediction['analysis_time']
+        direction = self.active_prediction['prediction_direction']
+        target_1h = self.active_prediction.get('predicted_price_1h')
+        target_4h = self.active_prediction.get('predicted_price_4h')
+        
+        if not target_1h or not target_4h or direction == "NEUTRAL":
+            return None
+        
+        target_1h = float(target_1h)
+        target_4h = float(target_4h)
+        
+        # Only check if enough time has passed (at least 4 hours for 4h target)
+        hours_elapsed = (datetime.now(timezone.utc) - pred_time).total_seconds() / 3600
         if hours_elapsed < 4:
             return None
         
-        move_pct = abs((current_price - pred_price) / pred_price) * 100
+        try:
+            async with self.db.pool.acquire() as conn:
+                now = datetime.now(timezone.utc)
+                
+                if direction == "BULLISH":
+                    # Check if price went above both targets
+                    max_price = await conn.fetchval(
+                        """
+                        SELECT MAX(high) 
+                        FROM candles_1m 
+                        WHERE time >= $1 AND time <= $2
+                        """,
+                        pred_time,
+                        now
+                    )
+                    
+                    if max_price and max_price >= target_4h and max_price >= target_1h:
+                        return f"Both targets hit! 1h: ${target_1h:,.0f}, 4h: ${target_4h:,.0f} (peak: ${max_price:,.0f})"
+                
+                elif direction == "BEARISH":
+                    # Check if price went below both targets
+                    min_price = await conn.fetchval(
+                        """
+                        SELECT MIN(low) 
+                        FROM candles_1m 
+                        WHERE time >= $1 AND time <= $2
+                        """,
+                        pred_time,
+                        now
+                    )
+                    
+                    if min_price and min_price <= target_4h and min_price <= target_1h:
+                        return f"Both targets hit! 1h: ${target_1h:,.0f}, 4h: ${target_4h:,.0f} (low: ${min_price:,.0f})"
         
-        if move_pct > 2.0:
-            return f"{hours_elapsed:.1f}h, {move_pct:.2f}% move from ${pred_price:,.0f}"
+        except Exception as e:
+            logger.error(f"Error checking both targets: {e}")
+        
+        return None
+    
+    async def check_targets_missed(self, current_price: float) -> Optional[str]:
+        """
+        Check if 4+ hours passed and targets were NOT hit - prediction didn't pan out.
+        Time for fresh analysis.
+        """
+        if not self.active_prediction:
+            return None
+        
+        pred_time = self.active_prediction['analysis_time']
+        direction = self.active_prediction['prediction_direction']
+        target_1h = self.active_prediction.get('predicted_price_1h')
+        target_4h = self.active_prediction.get('predicted_price_4h')
+        
+        if not target_4h or direction == "NEUTRAL":
+            return None
+        
+        target_4h = float(target_4h)
+        
+        hours_elapsed = (datetime.now(timezone.utc) - pred_time).total_seconds() / 3600
+        
+        # After 5+ hours, if 4h target not hit, prediction missed
+        if hours_elapsed < 5:
+            return None
+        
+        try:
+            async with self.db.pool.acquire() as conn:
+                now = datetime.now(timezone.utc)
+                
+                if direction == "BULLISH":
+                    # Check if price NEVER reached 4h target
+                    max_price = await conn.fetchval(
+                        """
+                        SELECT MAX(high) 
+                        FROM candles_1m 
+                        WHERE time >= $1 AND time <= $2
+                        """,
+                        pred_time,
+                        now
+                    )
+                    
+                    if max_price and max_price < target_4h:
+                        distance_pct = (target_4h - max_price) / max_price * 100
+                        return f"4h target ${target_4h:,.0f} not hit after {hours_elapsed:.1f}h (peak: ${max_price:,.0f}, {distance_pct:.1f}% short)"
+                
+                elif direction == "BEARISH":
+                    # Check if price NEVER reached 4h target
+                    min_price = await conn.fetchval(
+                        """
+                        SELECT MIN(low) 
+                        FROM candles_1m 
+                        WHERE time >= $1 AND time <= $2
+                        """,
+                        pred_time,
+                        now
+                    )
+                    
+                    if min_price and min_price > target_4h:
+                        distance_pct = (min_price - target_4h) / min_price * 100
+                        return f"4h target ${target_4h:,.0f} not hit after {hours_elapsed:.1f}h (low: ${min_price:,.0f}, {distance_pct:.1f}% short)"
+        
+        except Exception as e:
+            logger.error(f"Error checking missed targets: {e}")
         
         return None
 
@@ -444,7 +600,7 @@ class LLMAnalystService:
                 )
             
             self.active_prediction = await self.load_active_prediction()
-            logger.info(f"âœ… Request #{request_id} completed")
+            logger.info(f"✅ Request #{request_id} completed")
             
         except Exception as e:
             logger.error(f"Error processing request: {e}")
@@ -612,7 +768,7 @@ class LLMAnalystService:
             if parsed.direction == "BULLISH":
                 # Bullish prediction should have invalidation BELOW current price
                 if parsed.invalidation_level > current_price:
-                    logger.warning(f"⚠️ Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
+                    logger.warning(f"⚠️  Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
                     # Use critical support or calculate from price
                     if parsed.critical_support and parsed.critical_support < current_price:
                         parsed.invalidation_level = parsed.critical_support * 0.998
@@ -624,7 +780,7 @@ class LLMAnalystService:
                 # Bearish prediction should have invalidation ABOVE current price
                 if parsed.invalidation_level < current_price:
                     if self.config.detailed_logging:
-                        logger.warning(f"⚠️ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
+                        logger.warning(f"⚠️  Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
                     if parsed.critical_resistance and parsed.critical_resistance > current_price:
                         parsed.invalidation_level = parsed.critical_resistance * 1.002
                     else:
@@ -679,7 +835,7 @@ class LLMAnalystService:
             total_count = len(past_predictions)
             if total_count > 0:
                 accuracy = correct_count / total_count * 100
-                acc_emoji = "âœ…" if accuracy >= 60 else "⚠️" if accuracy >= 50 else "âŒ"
+                acc_emoji = "✅" if accuracy >= 60 else "⚠️ " if accuracy >= 50 else "❌"
                 logger.info(f"📊 PAST ACCURACY (1H direction): {acc_emoji} {correct_count}/{total_count} ({accuracy:.0f}%)")
                 logger.info("")
                 logger.info(f"📊 PAST ACCURACY (1H direction): {acc_emoji} {correct_count}/{total_count} ({accuracy:.0f}%)")
@@ -696,10 +852,10 @@ class LLMAnalystService:
             warnings = market_analysis.get('warnings')
             if warnings:
                 if isinstance(warnings, list) and len(warnings) > 0:
-                    logger.info(f"   ⚠️ Warnings: {len(warnings)} active")
+                    logger.info(f"   ⚠️  Warnings: {len(warnings)} active")
                     for msg in warnings[:3]:
                         if isinstance(msg, str):
-                            logger.info(f"      â€¢ {msg[:60]}")
+                            logger.info(f"      - {msg[:60]}")
             
             logger.info("")
         
@@ -733,7 +889,7 @@ class LLMAnalystService:
             dir_emoji = "📈" if diff_pct_1h > 0 else "📉"
             logger.info(f"  Expected (1H):  ${parsed.price_1h:,.0f} ({diff_pct_1h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (1H):  Not specified ⚠️")
+            logger.info(f"  Expected (1H):  Not specified ⚠️ ")
         
         if parsed.price_4h:
             diff_4h = parsed.price_4h - current_price
@@ -741,13 +897,13 @@ class LLMAnalystService:
             dir_emoji = "📈" if diff_pct_4h > 0 else "📉"
             logger.info(f"  Expected (4H):  ${parsed.price_4h:,.0f} ({diff_pct_4h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (4H):  Not specified ⚠️")
+            logger.info(f"  Expected (4H):  Not specified ⚠️ ")
         
         if parsed.invalidation_level:
             inv_pct = (parsed.invalidation_level - current_price) / current_price * 100
             logger.info(f"  Invalidation:   ${parsed.invalidation_level:,.0f} ({inv_pct:+.2f}%)")
         else:
-            logger.info(f"  Invalidation:   Not specified ⚠️")
+            logger.info(f"  Invalidation:   Not specified ⚠️ ")
         
         logger.info("")
         
@@ -783,7 +939,7 @@ class LLMAnalystService:
             for line in lines:
                 logger.info(line)
         else:
-            logger.info("  No specific reasoning extracted ⚠️")
+            logger.info("  No specific reasoning extracted ⚠️ ")
         
         logger.info("")
         logger.info("=" * 80)
@@ -810,9 +966,9 @@ class LLMAnalystService:
         # Show 1h target and change
         if parsed.price_1h:
             change_pct = (parsed.price_1h - current_price) / current_price * 100
-            target_str = f"â†’ ${parsed.price_1h:,.0f} ({change_pct:+.2f}%)"
+            target_str = f"→ ${parsed.price_1h:,.0f} ({change_pct:+.2f}%)"
         else:
-            target_str = "â†’ N/A"
+            target_str = "→ N/A"
         
         logger.info(
             f"{timestamp} | 🤖 {emoji} {parsed.direction} {parsed.confidence} | "
@@ -907,9 +1063,9 @@ class LLMAnalystService:
             trends_at_analysis=trends_at_analysis,
             warnings_at_analysis=warnings_at_analysis,
         )
-        
-        logger.debug("âœ… LLM analysis saved to database")
-    
+
+        logger.debug("✅ LLM analysis saved to database")
+
     async def stop(self):
         """Graceful shutdown."""
         logger.info("Shutting down LLM Analyst...")
