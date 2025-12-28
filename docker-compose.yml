@@ -16,7 +16,7 @@ services:
     volumes:
       - timescaledb_data:/var/lib/postgresql/data
       - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./ml-layer-1/migrations/001_ml_tables.sql:/docker-entrypoint-initdb.d/02-ml-tables.sql
+      - ./ml-layer-1/migrations/001_ml_predictions.sql:/docker-entrypoint-initdb.d/02-ml-predictions.sql
       - ./market-analyzer/migrations/001_market_analyzer_tables.sql:/docker-entrypoint-initdb.d/03-market-analyzer.sql
       - ./market-analyzer/migrations/002_enhanced_schema.sql:/docker-entrypoint-initdb.d/04-market-analyzer-enhancements.sql
       - ./llm-analyst/migrations/001_llm_analyst_tables.sql:/docker-entrypoint-initdb.d/05-llm-analyst.sql
