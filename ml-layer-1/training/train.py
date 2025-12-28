@@ -347,7 +347,7 @@ def main():
         
         # Export to ONNX
         onnx_path = MODELS_DIR / f'lstm_btc_{horizon}min.onnx'
-        input_sig = [tf.TensorSpec(shape=(None, 60, 9), dtype=tf.float32, name='input')]
+        input_sig = [tf.TensorSpec(shape=(None, 60, 13), dtype=tf.float32, name='input')]
         tf2onnx.convert.from_keras(model, input_signature=input_sig, opset=14, output_path=str(onnx_path))
         
         print(f"✓ Exported: {onnx_path}")
