@@ -34,7 +34,7 @@ struct Candle {
 
 struct ModelSession {
     session: Session,
-    horizon: usize, // 1, 5, or 15
+    horizon: usize,
 }
 
 #[tokio::main]
@@ -59,7 +59,6 @@ async fn main() -> Result<()> {
     let models_dir = std::env::var("ML_MODELS_DIR").unwrap_or_else(|_| "/app/models".to_string());
     let norm_path = format!("{}/normalization_params.json", models_dir);
 
-    // Connect to database
     let conn_str = format!(
         "host={} port={} dbname={} user={} password={}",
         db_host, db_port, db_name, db_user, db_password
@@ -77,7 +76,6 @@ async fn main() -> Result<()> {
     let client = Arc::new(client);
     info!("✓ Database connected");
 
-    // Load ONNX models (3 horizons)
     info!("Loading ONNX models...");
     let environment = Arc::new(Environment::builder().with_name("ml-inference").build()?);
 
@@ -104,7 +102,6 @@ async fn main() -> Result<()> {
         anyhow::bail!("No models found! Train models first.");
     }
 
-    // Load normalization params
     info!("Loading normalization params: {}", norm_path);
     let norm_json = std::fs::read_to_string(&norm_path)?;
     let norm_params: NormalizationParams = serde_json::from_str(&norm_json)?;
@@ -162,7 +159,6 @@ async fn run_inference(
 ) -> Result<f64> {
     let start = Instant::now();
 
-    // 1. Fetch last 100 candles (need 60 for features)
     let candles = fetch_candles(client).await?;
 
     if candles.len() < 60 {
@@ -171,13 +167,10 @@ async fn run_inference(
 
     let latest_60 = &candles[candles.len() - 60..];
 
-    // 2. Compute 9 features (matching train.py)
     let features = compute_features(latest_60)?;
 
-    // 3. Normalize features
     let features_norm = normalize_features(&features, norm_params);
 
-    // 4. Run inference for each horizon
     let mut predictions = HashMap::new();
     
     for (horizon, model_session) in models {
@@ -185,7 +178,6 @@ async fn run_inference(
         predictions.insert(*horizon, pred);
     }
 
-    // 5. Write to database
     let current_price = latest_60.last().unwrap().close;
     write_predictions(
         client,
@@ -224,13 +216,9 @@ async fn fetch_candles(client: &Arc<Client>) -> Result<Vec<Candle>> {
         });
     }
 
-    candles.reverse(); // Oldest first
+    candles.reverse();
     Ok(candles)
 }
-
-// ============================================================================
-// FEATURE COMPUTATION (9 features matching train.py)
-// ============================================================================
 
 fn compute_features(candles: &[Candle]) -> Result<Vec<f64>> {
     let n = candles.len();
@@ -241,16 +229,13 @@ fn compute_features(candles: &[Candle]) -> Result<Vec<f64>> {
 
     let last_idx = n - 1;
 
-    // 1. Price normalization (SMA 60)
     let sma60 = calculate_sma(&closes, 60);
     let std60 = calculate_std(&closes, 60);
     let price_norm = (closes[last_idx] - sma60[last_idx]) / (std60 + 1e-8);
 
-    // 2. RSI (14-period)
     let rsi = calculate_rsi(&closes, 14);
     let rsi_val = rsi[last_idx];
 
-    // 3-5. MACD
     let ema12 = calculate_ema(&closes, 12);
     let ema26 = calculate_ema(&closes, 26);
     let macd: Vec<f64> = ema12.iter().zip(&ema26).map(|(a, b)| a - b).collect();
@@ -261,25 +246,21 @@ fn compute_features(candles: &[Candle]) -> Result<Vec<f64>> {
     let signal_val = signal[last_idx];
     let hist_val = histogram[last_idx];
 
-    // 6. Bollinger Bands position
     let sma20 = calculate_sma(&closes, 20);
     let std20 = calculate_std(&closes, 20);
     let upper = sma20[last_idx] + 2.0 * std20;
     let lower = sma20[last_idx] - 2.0 * std20;
     let bb_position = ((closes[last_idx] - lower) / (upper - lower + 1e-8)).clamp(0.0, 1.0);
 
-    // 7. Volume ratio
     let sma_vol = calculate_sma(&volumes, 20);
     let vol_ratio = volumes[last_idx] / (sma_vol[last_idx] + 1e-8);
 
-    // 8. Returns
     let returns = if last_idx > 0 {
         (closes[last_idx] - closes[last_idx - 1]) / (closes[last_idx - 1] + 1e-8)
     } else {
         0.0
     };
 
-    // 9. ATR (14-period)
     let atr = calculate_atr(&highs, &lows, &closes, 14);
     let atr_val = atr[last_idx];
 
@@ -357,7 +338,6 @@ fn calculate_rsi(prices: &[f64], period: usize) -> Vec<f64> {
         }
     }
     
-    // Initial averages
     let mut avg_gain = gains[1..=period].iter().sum::<f64>() / period as f64;
     let mut avg_loss = losses[1..=period].iter().sum::<f64>() / period as f64;
     
@@ -387,10 +367,6 @@ fn calculate_atr(highs: &[f64], lows: &[f64], closes: &[f64], period: usize) -> 
     calculate_ema(&tr, period)
 }
 
-// ============================================================================
-// NORMALIZATION (matching train.py StandardScaler)
-// ============================================================================
-
 fn normalize_features(features: &[f64], params: &NormalizationParams) -> Vec<f64> {
     features
         .iter()
@@ -400,16 +376,9 @@ fn normalize_features(features: &[f64], params: &NormalizationParams) -> Vec<f64
         .collect()
 }
 
-// ============================================================================
-// ONNX INFERENCE
-// ============================================================================
-
 fn run_onnx_inference(session: &Session, features: &[f64]) -> Result<f64> {
-    // Create input tensor: (1, 60, 9)
-    // We only have features for last timestep, fill rest with zeros
     let mut input_data = vec![0.0f32; 60 * 9];
     
-    // Fill last timestep with features
     for (i, &f) in features.iter().enumerate() {
         input_data[59 * 9 + i] = f as f32;
     }
@@ -424,10 +393,6 @@ fn run_onnx_inference(session: &Session, features: &[f64]) -> Result<f64> {
     
     Ok(output[0] as f64)
 }
-
-// ============================================================================
-// DATABASE WRITE
-// ============================================================================
 
 async fn write_predictions(
     client: &Arc<Client>,
