@@ -30,6 +30,9 @@ struct Candle {
     high: f64,
     low: f64,
     volume: f64,
+    taker_buy_volume: f64,  // NEW
+    num_trades: f64,        // NEW
+    spread_bps: f64,        // NEW
 }
 
 struct ModelSession {
@@ -195,7 +198,10 @@ async fn run_inference(
 async fn fetch_candles(client: &Arc<Client>) -> Result<Vec<Candle>> {
     let rows = client
         .query(
-            "SELECT time, close, high, low, volume 
+            "SELECT time, close, high, low, volume, 
+                    taker_buy_base_asset_volume, 
+                    number_of_trades,
+                    COALESCE(spread_bps, 0.0) as spread_bps
              FROM candles_1m 
              ORDER BY time DESC 
              LIMIT 100",
@@ -211,6 +217,9 @@ async fn fetch_candles(client: &Arc<Client>) -> Result<Vec<Candle>> {
             high: row.get::<_, rust_decimal::Decimal>(2).to_string().parse()?,
             low: row.get::<_, rust_decimal::Decimal>(3).to_string().parse()?,
             volume: row.get::<_, rust_decimal::Decimal>(4).to_string().parse()?,
+            taker_buy_volume: row.get::<_, rust_decimal::Decimal>(5).to_string().parse()?,
+            num_trades: row.get::<_, i64>(6) as f64,
+            spread_bps: row.get::<_, rust_decimal::Decimal>(7).to_string().parse()?,
         });
     }
 
@@ -224,9 +233,13 @@ fn compute_features(candles: &[Candle]) -> Result<Vec<f64>> {
     let highs: Vec<f64> = candles.iter().map(|c| c.high).collect();
     let lows: Vec<f64> = candles.iter().map(|c| c.low).collect();
     let volumes: Vec<f64> = candles.iter().map(|c| c.volume).collect();
+    let taker_buys: Vec<f64> = candles.iter().map(|c| c.taker_buy_volume).collect();
+    let num_trades: Vec<f64> = candles.iter().map(|c| c.num_trades).collect();
+    let spreads: Vec<f64> = candles.iter().map(|c| c.spread_bps).collect();
 
     let last_idx = n - 1;
 
+    // Original 9 features (same as before)
     let sma60 = calculate_sma(&closes, 60);
     let std60 = calculate_std(&closes, 60);
     let price_norm = (closes[last_idx] - sma60[last_idx]) / (std60 + 1e-8);
@@ -262,6 +275,19 @@ fn compute_features(candles: &[Candle]) -> Result<Vec<f64>> {
     let atr = calculate_atr(&highs, &lows, &closes, 14);
     let atr_val = atr[last_idx];
 
+    // NEW FEATURES (10-13)
+    let taker_buy_ratio = taker_buys[last_idx] / (volumes[last_idx] + 1e-8);
+    
+    let spread_val = spreads[last_idx];
+    
+    let vol_momentum = if last_idx > 0 {
+        (volumes[last_idx] - volumes[last_idx - 1]) / (volumes[last_idx - 1] + 1e-8)
+    } else {
+        0.0
+    };
+    
+    let trades_per_volume = num_trades[last_idx] / (volumes[last_idx] + 1e-8);
+
     Ok(vec![
         price_norm,
         rsi_val,
@@ -272,6 +298,10 @@ fn compute_features(candles: &[Candle]) -> Result<Vec<f64>> {
         vol_ratio,
         returns,
         atr_val,
+        taker_buy_ratio,  // 10
+        spread_val,       // 11
+        vol_momentum,     // 12
+        trades_per_volume, // 13
     ])
 }
 
@@ -375,14 +405,14 @@ fn normalize_features(features: &[f64], params: &NormalizationParams) -> Vec<f64
 }
 
 fn run_onnx_inference(session: &Session, features: &[f64]) -> Result<f64> {
-    let mut input_data = vec![0.0f32; 60 * 9];
+    let mut input_data = vec![0.0f32; 60 * 13];  // 9 → 13
     
     for (i, &f) in features.iter().enumerate() {
-        input_data[59 * 9 + i] = f as f32;
+        input_data[59 * 13 + i] = f as f32;
     }
     
     let input_tensor = Array1::from_vec(input_data)
-        .into_shape((1, 60, 9))?
+        .into_shape((1, 60, 13))?  // 9 → 13
         .into_dyn();
     
     let outputs = session.run(vec![Value::from_array(session.allocator(), &input_tensor)?])?;

@@ -78,11 +78,12 @@ class FeatureComputer:
         return sma
     
     @staticmethod
-    def compute_features(closes, highs, lows, volumes):
-        """9 features matching Rust exactly"""
+    def compute_features(closes, highs, lows, volumes, taker_buy_volumes, num_trades, spreads):
+        """13 features including orderflow"""
         n = len(closes)
-        features = np.zeros((n, 9))
+        features = np.zeros((n, 13))  # 9 → 13
         
+        # Original 9 features (unchanged)
         # 1. price_norm
         sma60 = FeatureComputer.calculate_sma(closes, 60)
         std60 = np.array([np.std(closes[:i+1] if i < 59 else closes[i-59:i+1]) if i > 0 else 1.0 for i in range(n)])
@@ -124,8 +125,23 @@ class FeatureComputer:
             tr[i] = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
         features[:, 8] = FeatureComputer.calculate_ema(tr, 14)
         
+        # ====== NEW FEATURES ======
+        
+        # 10. Taker buy ratio (buy pressure)
+        features[:, 9] = taker_buy_volumes / (volumes + 1e-8)
+        
+        # 11. Spread (volatility/liquidity)
+        features[:, 10] = spreads
+        
+        # 12. Volume momentum (change in volume)
+        vol_momentum = np.zeros(n)
+        vol_momentum[1:] = (volumes[1:] - volumes[:-1]) / (volumes[:-1] + 1e-8)
+        features[:, 11] = vol_momentum
+        
+        # 13. Trades per volume (activity intensity)
+        features[:, 12] = num_trades / (volumes + 1e-8)
+        
         return features
-
 def fetch_data(db_config, months=12):
     conn = psycopg2.connect(**db_config)
     cur = conn.cursor()
@@ -133,8 +149,13 @@ def fetch_data(db_config, months=12):
     end = datetime.utcnow()
     start = end - timedelta(days=months * 30)
     
+    # ZMIEŃ - dodaj nowe kolumny
     cur.execute("""
-        SELECT EXTRACT(EPOCH FROM time)::bigint, close, high, low, volume
+        SELECT EXTRACT(EPOCH FROM time)::bigint, 
+               close, high, low, volume,
+               taker_buy_base_asset_volume,
+               number_of_trades,
+               spread_bps
         FROM candles_1m
         WHERE time >= %s AND time <= %s
         ORDER BY time ASC
@@ -152,8 +173,11 @@ def fetch_data(db_config, months=12):
     highs = np.array([r[2] for r in rows], dtype=np.float32)
     lows = np.array([r[3] for r in rows], dtype=np.float32)
     volumes = np.array([r[4] for r in rows], dtype=np.float32)
+    taker_buy_volumes = np.array([r[5] for r in rows], dtype=np.float32)  # NEW
+    num_trades = np.array([r[6] for r in rows], dtype=np.float32)  # NEW
+    spreads = np.array([r[7] if r[7] is not None else 0.0 for r in rows], dtype=np.float32)  # NEW
     
-    return timestamps, closes, highs, lows, volumes
+    return timestamps, closes, highs, lows, volumes, taker_buy_volumes, num_trades, spreads
 
 def create_sequences(features, targets, seq_len=60):
     X, y = [], []
@@ -164,7 +188,7 @@ def create_sequences(features, targets, seq_len=60):
 
 def build_model():
     model = keras.Sequential([
-        layers.Masking(mask_value=0., input_shape=(60, 9)),
+        layers.Masking(mask_value=0., input_shape=(60, 13)),  # 9 → 13
         layers.LSTM(128, return_sequences=True, time_major=False,
                     recurrent_activation='sigmoid'),
         layers.Dropout(0.3),
@@ -172,12 +196,12 @@ def build_model():
                     recurrent_activation='sigmoid'),
         layers.Dropout(0.3),
         layers.Dense(32, activation='relu'),
-        layers.Dense(1, activation='linear', dtype='float32'),  # Linear for regression
+        layers.Dense(1, activation='linear', dtype='float32'),
     ])
     
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=0.0005),
-        loss='mse',  # MSE better for log returns
+        loss='mse',
         metrics=['mae']
     )
     
@@ -240,13 +264,13 @@ def main():
     
     # Fetch data
     print("\nFetching data from DB...")
-    timestamps, closes, highs, lows, volumes = fetch_data(DB_CONFIG, 12)
+    timestamps, closes, highs, lows, volumes, taker_buy_volumes, num_trades, spreads = fetch_data(DB_CONFIG, 12)
     print(f"✓ Fetched {len(closes):,} candles")
-    
+
     # Compute features
-    print("\nComputing features...")
-    features = FeatureComputer.compute_features(closes, highs, lows, volumes)
-    
+    print("\nComputing features (13 total)...")
+    features = FeatureComputer.compute_features(closes, highs, lows, volumes, taker_buy_volumes, num_trades, spreads)
+
     # Train 3 horizons
     horizons = [1, 5, 15]
     version = f"v{datetime.now().strftime('%Y%m%d_%H%M%S')}"
