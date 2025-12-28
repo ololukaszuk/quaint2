@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     let db_user = std::env::var("DB_USER").unwrap_or_else(|_| "mltrader".to_string());
     let db_password = std::env::var("DB_PASSWORD").unwrap_or_else(|_| "password".to_string());
     let model_path = std::env::var("ML_MODEL_PATH")
-        .unwrap_or_else(|_| "/app/models/lstm_btc_15min.onnx".to_string());
+        .unwrap_or_else(|_| "/app/models/lstm_btc.onnx".to_string());
     let norm_path = std::env::var("ML_NORM_PATH")
         .unwrap_or_else(|_| "/app/models/normalization_params.json".to_string());
 

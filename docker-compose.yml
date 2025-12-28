@@ -170,10 +170,10 @@ services:
       - DB_NAME=btc_ml_production
       - DB_USER=mltrader
       - DB_PASSWORD=${DB_PASSWORD}
-      - ML_MODEL_PATH=/app/models/lstm_btc_15min.onnx
-      - ML_NORM_PATH=/app/models/normalization_params.json
+      - ML_MODEL_PATH=${ML_MODEL_PATH:-/app/models/lstm_btc.onnx}
+      - ML_NORM_PATH=${ML_NORM_PATH:-/app/models/normalization_params.json}
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
-      - ORT_TENSORRT_FP16_ENABLE=1
+      - ORT_TENSORRT_FP16_ENABLE=${ORT_TENSORRT_FP16_ENABLE:-1}
       - RUST_LOG=${LOG_LEVEL:-info}
     volumes:
       - ./ml-layer-1/models:/app/models:ro
@@ -192,6 +192,7 @@ services:
   # ============================================================================
   # ML Layer 1 - Training Service (on-demand model training)
   # ============================================================================
+
   ml-training:
     build:
       context: ./ml-layer-1/training
@@ -213,7 +214,7 @@ services:
       - DB_NAME=btc_ml_production
       - DB_USER=mltrader
       - DB_PASSWORD=${DB_PASSWORD}
-      - ML_MODELS_DIR=/app/models
+      - ML_MODELS_DIR=${ML_MODELS_DIR:-/app/models}
       - CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
       - PYTHONUNBUFFERED=1
     volumes:

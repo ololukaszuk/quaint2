@@ -476,8 +476,8 @@ class LLMAnalystService:
                         now
                     )
                     
-                    if max_price and max_price >= target_4h and max_price >= target_1h:
-                        return f"Both targets hit! 1h: ${target_1h:,.0f}, 4h: ${target_4h:,.0f} (peak: ${max_price:,.0f})"
+                    if max_price and float(max_price) >= target_4h and float(max_price) >= target_1h:
+                        return f"Both targets hit! 1h: ${target_1h:,.0f}, 4h: ${target_4h:,.0f} (peak: ${float(max_price):,.0f})"
                 
                 elif direction == "BEARISH":
                     # Check if price went below both targets
@@ -491,8 +491,8 @@ class LLMAnalystService:
                         now
                     )
                     
-                    if min_price and min_price <= target_4h and min_price <= target_1h:
-                        return f"Both targets hit! 1h: ${target_1h:,.0f}, 4h: ${target_4h:,.0f} (low: ${min_price:,.0f})"
+                    if min_price and float(min_price) <= target_4h and float(min_price) <= target_1h:
+                        return f"Both targets hit! 1h: ${target_1h:,.0f}, 4h: ${target_4h:,.0f} (low: ${float(min_price):,.0f})"
         
         except Exception as e:
             logger.error(f"Error checking both targets: {e}")
@@ -539,9 +539,9 @@ class LLMAnalystService:
                         now
                     )
                     
-                    if max_price and max_price < target_4h:
-                        distance_pct = (target_4h - max_price) / max_price * 100
-                        return f"4h target ${target_4h:,.0f} not hit after {hours_elapsed:.1f}h (peak: ${max_price:,.0f}, {distance_pct:.1f}% short)"
+                    if max_price and float(max_price) < target_4h:
+                        distance_pct = (target_4h - float(max_price)) / float(max_price) * 100
+                        return f"4h target ${target_4h:,.0f} not hit after {hours_elapsed:.1f}h (peak: ${float(max_price):,.0f}, {distance_pct:.1f}% short)"
                 
                 elif direction == "BEARISH":
                     # Check if price NEVER reached 4h target
@@ -555,9 +555,9 @@ class LLMAnalystService:
                         now
                     )
                     
-                    if min_price and min_price > target_4h:
-                        distance_pct = (min_price - target_4h) / min_price * 100
-                        return f"4h target ${target_4h:,.0f} not hit after {hours_elapsed:.1f}h (low: ${min_price:,.0f}, {distance_pct:.1f}% short)"
+                    if min_price and float(min_price) > target_4h:
+                        distance_pct = (float(min_price) - target_4h) / float(min_price) * 100
+                        return f"4h target ${target_4h:,.0f} not hit after {hours_elapsed:.1f}h (low: ${float(min_price):,.0f}, {distance_pct:.1f}% short)"
         
         except Exception as e:
             logger.error(f"Error checking missed targets: {e}")
@@ -768,7 +768,7 @@ class LLMAnalystService:
             if parsed.direction == "BULLISH":
                 # Bullish prediction should have invalidation BELOW current price
                 if parsed.invalidation_level > current_price:
-                    logger.warning(f"⚠️  Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
+                    logger.warning(f"⚠️ Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
                     # Use critical support or calculate from price
                     if parsed.critical_support and parsed.critical_support < current_price:
                         parsed.invalidation_level = parsed.critical_support * 0.998
@@ -780,7 +780,7 @@ class LLMAnalystService:
                 # Bearish prediction should have invalidation ABOVE current price
                 if parsed.invalidation_level < current_price:
                     if self.config.detailed_logging:
-                        logger.warning(f"⚠️  Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
+                        logger.warning(f"⚠️ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
                     if parsed.critical_resistance and parsed.critical_resistance > current_price:
                         parsed.invalidation_level = parsed.critical_resistance * 1.002
                     else:
@@ -835,7 +835,7 @@ class LLMAnalystService:
             total_count = len(past_predictions)
             if total_count > 0:
                 accuracy = correct_count / total_count * 100
-                acc_emoji = "✅" if accuracy >= 60 else "⚠️ " if accuracy >= 50 else "❌"
+                acc_emoji = "✅" if accuracy >= 60 else "⚠️" if accuracy >= 50 else "❌"
                 logger.info(f"📊 PAST ACCURACY (1H direction): {acc_emoji} {correct_count}/{total_count} ({accuracy:.0f}%)")
                 logger.info("")
                 logger.info(f"📊 PAST ACCURACY (1H direction): {acc_emoji} {correct_count}/{total_count} ({accuracy:.0f}%)")
@@ -852,10 +852,10 @@ class LLMAnalystService:
             warnings = market_analysis.get('warnings')
             if warnings:
                 if isinstance(warnings, list) and len(warnings) > 0:
-                    logger.info(f"   ⚠️  Warnings: {len(warnings)} active")
+                    logger.info(f"   ⚠️ Warnings: {len(warnings)} active")
                     for msg in warnings[:3]:
                         if isinstance(msg, str):
-                            logger.info(f"      - {msg[:60]}")
+                            logger.info(f"      â€¢ {msg[:60]}")
             
             logger.info("")
         
@@ -889,7 +889,7 @@ class LLMAnalystService:
             dir_emoji = "📈" if diff_pct_1h > 0 else "📉"
             logger.info(f"  Expected (1H):  ${parsed.price_1h:,.0f} ({diff_pct_1h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (1H):  Not specified ⚠️ ")
+            logger.info(f"  Expected (1H):  Not specified ⚠️")
         
         if parsed.price_4h:
             diff_4h = parsed.price_4h - current_price
@@ -897,13 +897,13 @@ class LLMAnalystService:
             dir_emoji = "📈" if diff_pct_4h > 0 else "📉"
             logger.info(f"  Expected (4H):  ${parsed.price_4h:,.0f} ({diff_pct_4h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (4H):  Not specified ⚠️ ")
+            logger.info(f"  Expected (4H):  Not specified ⚠️")
         
         if parsed.invalidation_level:
             inv_pct = (parsed.invalidation_level - current_price) / current_price * 100
             logger.info(f"  Invalidation:   ${parsed.invalidation_level:,.0f} ({inv_pct:+.2f}%)")
         else:
-            logger.info(f"  Invalidation:   Not specified ⚠️ ")
+            logger.info(f"  Invalidation:   Not specified ⚠️")
         
         logger.info("")
         
@@ -939,7 +939,7 @@ class LLMAnalystService:
             for line in lines:
                 logger.info(line)
         else:
-            logger.info("  No specific reasoning extracted ⚠️ ")
+            logger.info("  No specific reasoning extracted ⚠️")
         
         logger.info("")
         logger.info("=" * 80)
@@ -1063,9 +1063,9 @@ class LLMAnalystService:
             trends_at_analysis=trends_at_analysis,
             warnings_at_analysis=warnings_at_analysis,
         )
-
+        
         logger.debug("✅ LLM analysis saved to database")
-
+    
     async def stop(self):
         """Graceful shutdown."""
         logger.info("Shutting down LLM Analyst...")

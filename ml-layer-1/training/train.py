@@ -318,7 +318,7 @@ def main():
     best_model = models[best_horizon]['model']
     best_scaler = models[best_horizon]['scaler']
     
-    onnx_path = MODELS_DIR / 'lstm_btc_15min.onnx'
+    onnx_path = MODELS_DIR / 'lstm_btc.onnx'
     input_sig = [tf.TensorSpec(shape=(None, 60, 9), dtype=tf.float32, name='input')]
     tf2onnx.convert.from_keras(best_model, input_signature=input_sig, opset=14, output_path=str(onnx_path))
     
