@@ -188,28 +188,31 @@ def register_model_in_db(db_config, version, horizon, model_path, norm_params, m
     conn = psycopg2.connect(**db_config)
     cur = conn.cursor()
     
+    # Now insert new model
     cur.execute("""
         INSERT INTO ml_models 
         (version, model_path, normalization_params, training_metrics, 
-         is_active, trained_on_samples, training_duration_seconds, test_rmse, test_mape)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+         is_active, trained_on_samples, training_duration_seconds, test_rmse, test_mape, horizon)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (version) DO UPDATE SET
             model_path = EXCLUDED.model_path,
             normalization_params = EXCLUDED.normalization_params,
             training_metrics = EXCLUDED.training_metrics,
             is_active = EXCLUDED.is_active,
             test_rmse = EXCLUDED.test_rmse,
-            test_mape = EXCLUDED.test_mape
+            test_mape = EXCLUDED.test_mape,
+            horizon = EXCLUDED.horizon
     """, (
-        f"{version}_{horizon}min",
-        model_path,
-        json.dumps(norm_params),
-        json.dumps(metrics),
-        True,
-        samples,
-        duration,
-        metrics.get('test_rmse'),
-        metrics.get('test_mape')
+        f"{version}_{horizon}min",  # 1
+        model_path,                  # 2
+        json.dumps(norm_params),     # 3
+        json.dumps(metrics),         # 4
+        True,                        # 5
+        samples,                     # 6
+        duration,                    # 7
+        metrics.get('test_rmse_log'), # 8
+        metrics.get('test_mape'),    # 9
+        horizon                      # 10
     ))
     
     conn.commit()

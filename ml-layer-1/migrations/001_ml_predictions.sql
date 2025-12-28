@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS ml_models (
     training_metrics JSONB,
     deployed_at TIMESTAMPTZ DEFAULT NOW(),
     is_active BOOLEAN DEFAULT FALSE,
+    horizon INTEGER,  -- ← DODANE: 1, 5, or 15 (minutes)
     
     -- Training info
     trained_on_samples INT,
@@ -106,9 +107,9 @@ CREATE TABLE IF NOT EXISTS ml_models (
     test_mape REAL
 );
 
--- Ensure only one active model
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ml_models_active 
-    ON ml_models (is_active) 
+-- One active model PER HORIZON (not globally)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ml_models_active_per_horizon 
+    ON ml_models (horizon) 
     WHERE is_active = TRUE;
 
 -- Model performance tracking
@@ -140,5 +141,5 @@ CREATE INDEX IF NOT EXISTS idx_model_performance_version
     ON ml_model_performance (model_version, evaluation_time DESC);
 
 COMMENT ON TABLE ml_predictions IS 'Real-time ML predictions from inference service';
-COMMENT ON TABLE ml_models IS 'ML model versions and metadata';
+COMMENT ON TABLE ml_models IS 'ML model versions and metadata (one active per horizon)';
 COMMENT ON TABLE ml_model_performance IS 'Model accuracy tracking over time';
