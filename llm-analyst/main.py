@@ -412,15 +412,32 @@ class LLMAnalystService:
         1. After 6+ hours (prediction window expired)
         2. After 4+ hours with 1.5%+ move
         3. After 2+ hours with 3%+ move (significant deviation)
+        4. NEUTRAL predictions: 1+ hour with support/resistance break
         """
         if not self.active_prediction:
             return None
         
         pred_time = self.active_prediction['analysis_time']
         pred_price = float(self.active_prediction['price'])
+        direction = self.active_prediction['prediction_direction']
         
         hours_elapsed = (datetime.now(timezone.utc) - pred_time).total_seconds() / 3600
         move_pct = abs((current_price - pred_price) / pred_price) * 100
+        
+        # Special check for NEUTRAL predictions: trigger if price breaks support/resistance significantly
+        if direction == "NEUTRAL" and hours_elapsed >= 1:
+            critical_support = self.active_prediction.get('critical_support')
+            critical_resistance = self.active_prediction.get('critical_resistance')
+            
+            if critical_support and current_price < float(critical_support):
+                breach_pct = abs((current_price - float(critical_support)) / current_price) * 100
+                if breach_pct >= 0.5:  # 0.5% breach below support
+                    return f"NEUTRAL: broke support ${float(critical_support):,.0f} by {breach_pct:.2f}% (now ${current_price:,.0f})"
+            
+            if critical_resistance and current_price > float(critical_resistance):
+                breach_pct = abs((current_price - float(critical_resistance)) / current_price) * 100
+                if breach_pct >= 0.5:  # 0.5% breach above resistance
+                    return f"NEUTRAL: broke resistance ${float(critical_resistance):,.0f} by {breach_pct:.2f}% (now ${current_price:,.0f})"
         
         # After 6 hours, prediction is definitely stale (4h target window + 2h buffer)
         if hours_elapsed >= 6:
@@ -768,7 +785,7 @@ class LLMAnalystService:
             if parsed.direction == "BULLISH":
                 # Bullish prediction should have invalidation BELOW current price
                 if parsed.invalidation_level > current_price:
-                    logger.warning(f"⚠️ Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
+                    logger.warning(f"⚠️ Fixing invalidation: BULLISH but invalidation ${parsed.invalidation_level:,.0f} > price ${current_price:,.0f}")
                     # Use critical support or calculate from price
                     if parsed.critical_support and parsed.critical_support < current_price:
                         parsed.invalidation_level = parsed.critical_support * 0.998
@@ -780,7 +797,7 @@ class LLMAnalystService:
                 # Bearish prediction should have invalidation ABOVE current price
                 if parsed.invalidation_level < current_price:
                     if self.config.detailed_logging:
-                        logger.warning(f"⚠️ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
+                        logger.warning(f"⚠️ Fixing invalidation: BEARISH but invalidation ${parsed.invalidation_level:,.0f} < price ${current_price:,.0f}")
                     if parsed.critical_resistance and parsed.critical_resistance > current_price:
                         parsed.invalidation_level = parsed.critical_resistance * 1.002
                     else:
@@ -852,10 +869,10 @@ class LLMAnalystService:
             warnings = market_analysis.get('warnings')
             if warnings:
                 if isinstance(warnings, list) and len(warnings) > 0:
-                    logger.info(f"   ⚠️ Warnings: {len(warnings)} active")
+                    logger.info(f"   ⚠️ Warnings: {len(warnings)} active")
                     for msg in warnings[:3]:
                         if isinstance(msg, str):
-                            logger.info(f"      â€¢ {msg[:60]}")
+                            logger.info(f"      ⚠️ {msg[:60]}")
             
             logger.info("")
         
@@ -889,7 +906,7 @@ class LLMAnalystService:
             dir_emoji = "📈" if diff_pct_1h > 0 else "📉"
             logger.info(f"  Expected (1H):  ${parsed.price_1h:,.0f} ({diff_pct_1h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (1H):  Not specified ⚠️")
+            logger.info(f"  Expected (1H):  Not specified ⚠️")
         
         if parsed.price_4h:
             diff_4h = parsed.price_4h - current_price
@@ -897,13 +914,13 @@ class LLMAnalystService:
             dir_emoji = "📈" if diff_pct_4h > 0 else "📉"
             logger.info(f"  Expected (4H):  ${parsed.price_4h:,.0f} ({diff_pct_4h:+.2f}%) {dir_emoji}")
         else:
-            logger.info(f"  Expected (4H):  Not specified ⚠️")
+            logger.info(f"  Expected (4H):  Not specified ⚠️")
         
         if parsed.invalidation_level:
             inv_pct = (parsed.invalidation_level - current_price) / current_price * 100
             logger.info(f"  Invalidation:   ${parsed.invalidation_level:,.0f} ({inv_pct:+.2f}%)")
         else:
-            logger.info(f"  Invalidation:   Not specified ⚠️")
+            logger.info(f"  Invalidation:   Not specified ⚠️")
         
         logger.info("")
         
@@ -939,7 +956,7 @@ class LLMAnalystService:
             for line in lines:
                 logger.info(line)
         else:
-            logger.info("  No specific reasoning extracted ⚠️")
+            logger.info("  No specific reasoning extracted ⚠️")
         
         logger.info("")
         logger.info("=" * 80)
