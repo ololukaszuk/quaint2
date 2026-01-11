@@ -909,24 +909,24 @@ func getMLPredictionsHandler(w http.ResponseWriter, r *http.Request) {
 	argCount := 1
 
 	if intervalStart != "" {
-		query = fmt.Sprintf(" AND target_time_start = $%d", argCount)
+		query += fmt.Sprintf(" AND target_time_start = $%d", argCount)
 		args = append(args, intervalStart)
-		argCount
+		argCount++
 	}
 
 	if onlyCompleted {
-		query = " AND was_prediction_correct IS NOT NULL"
+		query += " AND was_prediction_correct IS NOT NULL"
 	}
 
 	if minCertainty != "" {
 		if cert, err := strconv.ParseFloat(minCertainty, 64); err == nil {
-			query = fmt.Sprintf(" AND predicted_certainty >= $%d", argCount)
+			query += fmt.Sprintf(" AND predicted_certainty >= $%d", argCount)
 			args = append(args, cert)
-			argCount
+			argCount++
 		}
 	}
 
-	query = fmt.Sprintf(" ORDER BY time DESC LIMIT $%d", argCount)
+	query += fmt.Sprintf(" ORDER BY time DESC LIMIT $%d", argCount)
 	args = append(args, limit)
 
 	rows, err := db.Query(r.Context(), query, args...)
@@ -1164,5 +1164,4 @@ func getMLIntervalSummaryHandler(w http.ResponseWriter, r *http.Request) {
 		Data:    intervals,
 		Count:   len(intervals),
 	})
-
 }
