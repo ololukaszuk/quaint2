@@ -66,6 +66,39 @@ type DataQualityLog struct {
 	CreatedAt        time.Time  `json:"created_at"`
 }
 
+// MLPrediction15m - ML model predictions for 15-minute intervals
+type MLPrediction15m struct {
+	ID                    int64      `json:"id"`
+	Time                  time.Time  `json:"time"`
+	TargetTimeStart       time.Time  `json:"target_time_start"`
+	TargetTimeEnd         time.Time  `json:"target_time_end"`
+	IntervalOpenPrice     *float64   `json:"interval_open_price,string,omitempty"`
+	IntervalClosePrice    *float64   `json:"interval_close_price,string,omitempty"`
+	ActualDirection       *int       `json:"actual_direction,omitempty"`
+	ActualDirectionLabel  *string    `json:"actual_direction_label,omitempty"`
+	PredictedDirection    int        `json:"predicted_direction"`
+	PredictedDirectionLabel string   `json:"predicted_direction_label"`
+	PredictedCertainty    float64    `json:"predicted_certainty"`
+	PredictionCount       int        `json:"prediction_count"`
+	AvgCertainty          *float64   `json:"avg_certainty,omitempty"`
+	WasPredictionCorrect  *bool      `json:"was_prediction_correct,omitempty"`
+}
+
+// MLPredictionStats - Aggregated statistics for ML predictions
+type MLPredictionStats struct {
+	TotalPredictions     int     `json:"total_predictions"`
+	CorrectPredictions   int     `json:"correct_predictions"`
+	Accuracy             float64 `json:"accuracy"`
+	IntervalsTotal       int     `json:"intervals_total"`
+	IntervalsWon         int     `json:"intervals_won"`
+	IntervalWinRate      float64 `json:"interval_win_rate"`
+	AvgConfidence        float64 `json:"avg_confidence"`
+	HighConfidenceAcc    float64 `json:"high_confidence_accuracy"`
+	EarlyAccuracy        float64 `json:"early_accuracy"`
+	MidAccuracy          float64 `json:"mid_accuracy"`
+	LateAccuracy         float64 `json:"late_accuracy"`
+}
+
 // LLMAnalysis - Enhanced with market context fields (schema v2.0)
 type LLMAnalysis struct {
 	ID                   int64           `json:"id"`
@@ -281,6 +314,12 @@ func main() {
 	protected.HandleFunc("/llm-analysis", getLLMAnalysisHandler).Methods("GET")
 	protected.HandleFunc("/market-analysis", getMarketAnalysisHandler).Methods("GET")
 	protected.HandleFunc("/market-signals", getMarketSignalsHandler).Methods("GET")
+
+	// ML Predictions endpoints
+	protected.HandleFunc("/ml/predictions", getMLPredictionsHandler).Methods("GET")
+	protected.HandleFunc("/ml/predictions/stats", getMLPredictionStatsHandler).Methods("GET")
+	protected.HandleFunc("/ml/predictions/latest", getMLLatestPredictionHandler).Methods("GET")
+	protected.HandleFunc("/ml/predictions/intervals", getMLIntervalSummaryHandler).Methods("GET")
 
 	// CORS
 	c := cors.New(cors.Options{
@@ -841,4 +880,289 @@ func checkColumnExists(ctx context.Context, table, column string) bool {
 		return false
 	}
 	return exists
+}
+
+// ============================================================================
+// ML Predictions Handlers
+// ============================================================================
+
+func getMLPredictionsHandler(w http.ResponseWriter, r *http.Request) {
+	limit := parseInt(r.URL.Query().Get("limit"), 100)
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	// Optional filters
+	intervalStart := r.URL.Query().Get("interval_start")
+	onlyCompleted := r.URL.Query().Get("completed") == "true"
+	minCertainty := r.URL.Query().Get("min_certainty")
+
+	query := `SELECT id, time, target_time_start, target_time_end,
+		interval_open_price, interval_close_price,
+		actual_direction, actual_direction_label,
+		predicted_direction, predicted_direction_label,
+		predicted_certainty, prediction_count, avg_certainty,
+		was_prediction_correct
+		FROM predictions_15m WHERE 1=1`
+
+	args := []interface{}{}
+	argCount := 1
+
+	if intervalStart != "" {
+		query = fmt.Sprintf(" AND target_time_start = $%d", argCount)
+		args = append(args, intervalStart)
+		argCount
+	}
+
+	if onlyCompleted {
+		query = " AND was_prediction_correct IS NOT NULL"
+	}
+
+	if minCertainty != "" {
+		if cert, err := strconv.ParseFloat(minCertainty, 64); err == nil {
+			query = fmt.Sprintf(" AND predicted_certainty >= $%d", argCount)
+			args = append(args, cert)
+			argCount
+		}
+	}
+
+	query = fmt.Sprintf(" ORDER BY time DESC LIMIT $%d", argCount)
+	args = append(args, limit)
+
+	rows, err := db.Query(r.Context(), query, args...)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Query error: %v", err),
+		})
+		return
+	}
+	defer rows.Close()
+
+	predictions := []MLPrediction15m{}
+	for rows.Next() {
+		var p MLPrediction15m
+		err := rows.Scan(
+			&p.ID, &p.Time, &p.TargetTimeStart, &p.TargetTimeEnd,
+			&p.IntervalOpenPrice, &p.IntervalClosePrice,
+			&p.ActualDirection, &p.ActualDirectionLabel,
+			&p.PredictedDirection, &p.PredictedDirectionLabel,
+			&p.PredictedCertainty, &p.PredictionCount, &p.AvgCertainty,
+			&p.WasPredictionCorrect,
+		)
+		if err != nil {
+			respondJSON(w, http.StatusInternalServerError, APIResponse{
+				Success: false,
+				Error:   fmt.Sprintf("Scan error: %v", err),
+			})
+			return
+		}
+		predictions = append(predictions, p)
+	}
+
+	respondJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    predictions,
+		Count:   len(predictions),
+	})
+}
+
+func getMLPredictionStatsHandler(w http.ResponseWriter, r *http.Request) {
+	// Time range filter (optional)
+	hoursBack := parseInt(r.URL.Query().Get("hours"), 24)
+	
+	query := `
+	WITH completed AS (
+		SELECT 
+			was_prediction_correct,
+			predicted_certainty,
+			target_time_start,
+			EXTRACT(MINUTE FROM time)::int % 15 as minute_in_interval
+		FROM predictions_15m
+		WHERE was_prediction_correct IS NOT NULL
+		AND time > NOW() - INTERVAL '%d hours'
+	),
+	interval_results AS (
+		SELECT 
+			target_time_start,
+			COUNT(*) as total,
+			SUM(CASE WHEN was_prediction_correct THEN 1 ELSE 0 END) as correct
+		FROM completed
+		GROUP BY target_time_start
+	)
+	SELECT 
+		(SELECT COUNT(*) FROM completed) as total_predictions,
+		(SELECT SUM(CASE WHEN was_prediction_correct THEN 1 ELSE 0 END) FROM completed) as correct_predictions,
+		(SELECT COUNT(*) FROM interval_results) as intervals_total,
+		(SELECT SUM(CASE WHEN correct > total/2 THEN 1 ELSE 0 END) FROM interval_results) as intervals_won,
+		(SELECT AVG(predicted_certainty) FROM completed) as avg_confidence,
+		(SELECT AVG(CASE WHEN was_prediction_correct THEN 1.0 ELSE 0.0 END) 
+			FROM completed WHERE predicted_certainty >= 0.8) as high_conf_accuracy,
+		(SELECT AVG(CASE WHEN was_prediction_correct THEN 1.0 ELSE 0.0 END) 
+			FROM completed WHERE minute_in_interval < 5) as early_accuracy,
+		(SELECT AVG(CASE WHEN was_prediction_correct THEN 1.0 ELSE 0.0 END) 
+			FROM completed WHERE minute_in_interval >= 5 AND minute_in_interval < 10) as mid_accuracy,
+		(SELECT AVG(CASE WHEN was_prediction_correct THEN 1.0 ELSE 0.0 END) 
+			FROM completed WHERE minute_in_interval >= 10) as late_accuracy
+	`
+	
+	query = fmt.Sprintf(query, hoursBack)
+
+	var stats MLPredictionStats
+	var avgConf, highConfAcc, earlyAcc, midAcc, lateAcc *float64
+	
+	err := db.QueryRow(r.Context(), query).Scan(
+		&stats.TotalPredictions,
+		&stats.CorrectPredictions,
+		&stats.IntervalsTotal,
+		&stats.IntervalsWon,
+		&avgConf,
+		&highConfAcc,
+		&earlyAcc,
+		&midAcc,
+		&lateAcc,
+	)
+	
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Query error: %v", err),
+		})
+		return
+	}
+
+	// Calculate derived fields
+	if stats.TotalPredictions > 0 {
+		stats.Accuracy = float64(stats.CorrectPredictions) / float64(stats.TotalPredictions)
+	}
+	if stats.IntervalsTotal > 0 {
+		stats.IntervalWinRate = float64(stats.IntervalsWon) / float64(stats.IntervalsTotal)
+	}
+	if avgConf != nil {
+		stats.AvgConfidence = *avgConf
+	}
+	if highConfAcc != nil {
+		stats.HighConfidenceAcc = *highConfAcc
+	}
+	if earlyAcc != nil {
+		stats.EarlyAccuracy = *earlyAcc
+	}
+	if midAcc != nil {
+		stats.MidAccuracy = *midAcc
+	}
+	if lateAcc != nil {
+		stats.LateAccuracy = *lateAcc
+	}
+
+	respondJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    stats,
+	})
+}
+
+func getMLLatestPredictionHandler(w http.ResponseWriter, r *http.Request) {
+	query := `SELECT id, time, target_time_start, target_time_end,
+		interval_open_price, interval_close_price,
+		actual_direction, actual_direction_label,
+		predicted_direction, predicted_direction_label,
+		predicted_certainty, prediction_count, avg_certainty,
+		was_prediction_correct
+		FROM predictions_15m
+		ORDER BY time DESC
+		LIMIT 1`
+
+	var p MLPrediction15m
+	err := db.QueryRow(r.Context(), query).Scan(
+		&p.ID, &p.Time, &p.TargetTimeStart, &p.TargetTimeEnd,
+		&p.IntervalOpenPrice, &p.IntervalClosePrice,
+		&p.ActualDirection, &p.ActualDirectionLabel,
+		&p.PredictedDirection, &p.PredictedDirectionLabel,
+		&p.PredictedCertainty, &p.PredictionCount, &p.AvgCertainty,
+		&p.WasPredictionCorrect,
+	)
+
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Query error: %v", err),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    p,
+	})
+}
+
+func getMLIntervalSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	limit := parseInt(r.URL.Query().Get("limit"), 20)
+	if limit > 100 {
+		limit = 100
+	}
+
+	query := `SELECT 
+		target_time_start,
+		target_time_end,
+		MIN(interval_open_price) as open_price,
+		MAX(interval_close_price) as close_price,
+		MAX(actual_direction_label) as actual_direction,
+		COUNT(*) as prediction_count,
+		SUM(CASE WHEN was_prediction_correct THEN 1 ELSE 0 END) as correct_count,
+		AVG(predicted_certainty) as avg_certainty,
+		SUM(CASE WHEN was_prediction_correct THEN 1 ELSE 0 END)::float / COUNT(*) as accuracy
+		FROM predictions_15m
+		WHERE was_prediction_correct IS NOT NULL
+		GROUP BY target_time_start, target_time_end
+		ORDER BY target_time_start DESC
+		LIMIT $1`
+
+	rows, err := db.Query(r.Context(), query, limit)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Error:   fmt.Sprintf("Query error: %v", err),
+		})
+		return
+	}
+	defer rows.Close()
+
+	type IntervalSummary struct {
+		TargetTimeStart   time.Time `json:"target_time_start"`
+		TargetTimeEnd     time.Time `json:"target_time_end"`
+		OpenPrice         *float64  `json:"open_price,string,omitempty"`
+		ClosePrice        *float64  `json:"close_price,string,omitempty"`
+		ActualDirection   *string   `json:"actual_direction,omitempty"`
+		PredictionCount   int       `json:"prediction_count"`
+		CorrectCount      int       `json:"correct_count"`
+		AvgCertainty      float64   `json:"avg_certainty"`
+		Accuracy          float64   `json:"accuracy"`
+	}
+
+	intervals := []IntervalSummary{}
+	for rows.Next() {
+		var s IntervalSummary
+		err := rows.Scan(
+			&s.TargetTimeStart, &s.TargetTimeEnd,
+			&s.OpenPrice, &s.ClosePrice,
+			&s.ActualDirection,
+			&s.PredictionCount, &s.CorrectCount,
+			&s.AvgCertainty, &s.Accuracy,
+		)
+		if err != nil {
+			respondJSON(w, http.StatusInternalServerError, APIResponse{
+				Success: false,
+				Error:   fmt.Sprintf("Scan error: %v", err),
+			})
+			return
+		}
+		intervals = append(intervals, s)
+	}
+
+	respondJSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data:    intervals,
+		Count:   len(intervals),
+	})
+
 }
